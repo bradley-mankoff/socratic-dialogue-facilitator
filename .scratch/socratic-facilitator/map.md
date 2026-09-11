@@ -12,16 +12,16 @@ Buildable spec for a self-hosted (this Mac on-only) Socratic dialogue facilitato
 ## Decisions so far
 
 <!-- one line per closed ticket: gist + link; decision lives in ticket -->
+- [Free self-host URL while this Mac is on](issues/01-host-substrate.md) — default Cloudflare Quick Tunnel ($0, no account), fallback LAN + QR
+- [Canvas shape without inventing pan/zoom](issues/04-canvas-shape.md) — adopt Cytoscape.js (MIT, first-party PNG export + JSON round-trip)
+- [Live transcription + definition-search pipeline](issues/05-live-pipeline.md) — faster-whisper local int8 + Wiktionary-first chain with cite/dedup policy
 
 ## Not yet specified
 
 <!-- in-scope fog too coarse to ticket; graduates as frontier advances -->
 
-- Transcription engine pick (local free vs API) and interruption UX in live mode.
-- Search provider + ranking for highly-cited informal definitions; dedup + cite policy.
 - Persistence model for board across async/live toggles (file, sqlite, crash recovery).
 - Trust model on LAN/shared URL (no auth v1 vs minimal token).
-- Canvas export fidelity (PNG/SVG fidelity, layout stability).
 
 ## Out of scope
 
