@@ -1,7 +1,7 @@
 # 01 — Free self-host URL while this Mac is on
 
 Type: research
-Status: open
+Status: claimed
 Blocked by: none
 
 ## Question
