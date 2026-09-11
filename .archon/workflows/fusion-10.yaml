@@ -1,0 +1,51 @@
+name: fusion-10
+description: |
+  Two-wide fused plan, then two-wide implement, then fused impl. Planning and
+  review use the large tier; implementation uses the small tier.
+
+nodes:
+  - id: plan
+    include: fusion-plan-2
+
+  - id: judge-plan
+    command: fusion-judge-plan-fuse-forced
+    model: large
+    retry: {max_attempts: 5, delay_ms: 5000, on_error: all}
+    context: fresh
+    depends_on: [plan]
+    output_format:
+      type: object
+      properties:
+        verdict: { type: string }
+        mode: { type: string, enum: [fuse] }
+        chosen: { type: string, enum: [a, b] }
+      required: [verdict, mode, chosen]
+
+  - id: stage
+    bash: |
+      set -euo pipefail
+      mkdir -p "$ARTIFACTS_DIR/bundles"
+      cat "$ARTIFACTS_DIR/fused-plan.md" > "$ARTIFACTS_DIR/bundles/plan.md"
+    depends_on: [judge-plan]
+
+  - id: panel
+    include: fusion-panel-impl-2
+    depends_on: [stage]
+
+  - id: judge-impl
+    command: fusion-judge-impl-fuse-forced
+    model: large
+    retry: {max_attempts: 5, delay_ms: 5000, on_error: all}
+    context: fresh
+    depends_on: [panel]
+    output_format:
+      type: object
+      properties:
+        verdict: { type: string }
+        mode: { type: string, enum: [fuse] }
+        chosen: { type: string, enum: [a, b] }
+      required: [verdict, mode, chosen]
+
+  - id: finish
+    include: fusion-finish
+    depends_on: [judge-impl]
