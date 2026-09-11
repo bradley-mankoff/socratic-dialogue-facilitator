@@ -1,5 +1,5 @@
 {
-  "tracker": "scratch",
+  "tracker": "piyaz",
   "max_concurrent": 1,
   "default_tactic": "oneshot",
   "allow_fusion": true,
@@ -8,5 +8,6 @@
   "brief_max_chars": 24000,
   "max_run_hours": 24,
   "max_attempts": 2,
-  "auto_merge": false
+  "auto_merge": false,
+  "piyaz_project": "SDF"
 }
