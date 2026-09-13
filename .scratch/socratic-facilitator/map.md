@@ -24,9 +24,6 @@ Buildable spec for a self-hosted (this Mac on-only) Socratic dialogue facilitato
 
 <!-- in-scope fog too coarse to ticket; graduates as frontier advances -->
 
-- Persistence model for board across async/live toggles (file, sqlite, crash recovery).
-- Trust model on LAN/shared URL (no auth v1 vs minimal token).
-
 ## Out of scope
 
 <!-- beyond destination; never graduates; closed tickets stay linked here -->
@@ -36,3 +33,7 @@ Buildable spec for a self-hosted (this Mac on-only) Socratic dialogue facilitato
 - Always-on cloud hosting, multi-tenant auth, paid tunnels as the default path.
 - Non-definitional claims (empirical predictions etc.) — future direction, beyond this spec
 - Inventing interactive pan/zoom from scratch (adopt OSS).
+
+## Build
+
+- Spec SDF-N1 v3 (consensus text, grok-debated) sliced into SDF-1..SDF-20 with depends_on edges; critical path SDF-1 → SDF-2 → SDF-6 → SDF-7 → SDF-17 → SDF-20. All draft; SDF project active. Fog graduated: persistence = durable local per-mutation store; trust = honor system plus display names.
