@@ -14,7 +14,7 @@ nodes:
 
       Match existing style. Shortest correct diff. Run the repo gate if one
       exists (pytest, node verify.js, etc.) and fix failures before you stop.
-      Write a short record of files + decisions to $ARTIFACTS_DIR/record.md.
+      Write a short record of files + decisions to $ARTIFACTS_DIR/record.md, including any harness savings lines (round-trips avoided, tokens avoided).
 
   - id: draft-pr
     bash: |

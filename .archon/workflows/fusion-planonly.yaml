@@ -1,0 +1,29 @@
+name: fusion-planonly
+description: |
+  Three-wide fused planning only (no implementation). Reuses the
+  upstream plan block and plan judge, then emits the fused plan.
+  Planning analogue of a fusion ticket: 3 planners draft, judge fuses.
+
+nodes:
+  - id: plan
+    include: fusion-plan-3
+
+  - id: judge-plan
+    command: fusion-judge-plan-fuse-forced
+    model: '@judge'
+    retry: {max_attempts: 5, delay_ms: 5000, on_error: all}
+    context: fresh
+    depends_on: [plan]
+    output_format:
+      type: object
+      properties:
+        verdict: { type: string }
+        mode: { type: string, enum: [fuse] }
+        chosen: { type: string, enum: [a, b, c] }
+      required: [verdict, mode, chosen]
+
+  - id: emit
+    bash: |
+      set -euo pipefail
+      cat "$ARTIFACTS_DIR/fused-plan.md"
+    depends_on: [judge-plan]

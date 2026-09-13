@@ -1,15 +1,15 @@
 name: fusion-04
 description: |
-  Two-wide PIV + forced fuse. Real logic / invariants.
-  Two parallel small-tier PIV implementers, one large-tier judge.
+  Three-wide PIV + forced fuse. Real logic / invariants.
+  Three parallel PIV implementers (@panel-a/b/c), one @judge fuse.
 
 nodes:
   - id: panel
-    include: fusion-panel-piv-2
+    include: fusion-panel-piv-3
 
   - id: judge
     command: fusion-judge-impl-fuse-forced
-    model: large
+    model: '@judge'
     retry: {max_attempts: 5, delay_ms: 5000, on_error: all}
     context: fresh
     depends_on: [panel]
@@ -18,7 +18,7 @@ nodes:
       properties:
         verdict: { type: string }
         mode: { type: string, enum: [fuse] }
-        chosen: { type: string, enum: [a, b] }
+        chosen: { type: string, enum: [a, b, c] }
       required: [verdict, mode, chosen]
 
   - id: finish
