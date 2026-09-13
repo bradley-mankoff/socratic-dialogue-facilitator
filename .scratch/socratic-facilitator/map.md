@@ -17,6 +17,7 @@ Buildable spec for a self-hosted (this Mac on-only) Socratic dialogue facilitato
 - [Live transcription + definition-search pipeline](issues/05-live-pipeline.md) — faster-whisper local int8 + Wiktionary-first chain with cite/dedup policy
 - [Migrate factory to Piyaz](issues/06-piyaz-migration.md) — project SDF live, factory.json tracker=piyaz, dry-run passes
 - [Board semantics for single toggleable board](issues/02-board-semantics.md) — modes renamed LLM-as-Socrates / LLM-as-participant / LLM-only-assists; universal-franchise majority votes; ambient tally; revision-by-new-node; toggle cut locked
+- [Speaker enrollment and voiceprint calibration](issues/07-speaker-enrollment.md) — wespeaker resnet34-LM centroids (~30s calibration), tunnel-HTTPS mic for guests, SPEAKER_XX fallback
 
 ## Not yet specified
 
