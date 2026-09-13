@@ -1,1 +1,5 @@
 .scratch/factory-ledger.json*
+.scratch/factory-dispatch.log
+__pycache__/
+*.py[cod]
+.pytest_cache/
