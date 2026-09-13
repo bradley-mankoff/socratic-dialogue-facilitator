@@ -1,7 +1,7 @@
 # 03 — Facilitator manners (auto vs on-demand)
 
 Type: grilling
-Status: open
+Status: claimed
 Blocked by: 02
 
 ## Question
