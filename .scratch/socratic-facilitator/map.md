@@ -16,8 +16,9 @@ Buildable spec for a self-hosted (this Mac on-only) Socratic dialogue facilitato
 - [Canvas shape without inventing pan/zoom](issues/04-canvas-shape.md) — adopt Cytoscape.js (MIT, first-party PNG export + JSON round-trip)
 - [Live transcription + definition-search pipeline](issues/05-live-pipeline.md) — faster-whisper local int8 + Wiktionary-first chain with cite/dedup policy
 - [Migrate factory to Piyaz](issues/06-piyaz-migration.md) — project SDF live, factory.json tracker=piyaz, dry-run passes
-- [Board semantics for single toggleable board](issues/02-board-semantics.md) — modes renamed LLM-as-Socrates / LLM-as-participant / LLM-only-assists; universal-franchise majority votes; ambient tally; revision-by-new-node; toggle cut locked
+- [Board semantics for single toggleable board](issues/02-board-semantics.md) — TWO modes (LLM Participates / LLM Facilitates), Socrates as role; universal-franchise majority; ambient tally; revision-by-new-node (amended 09-13)
 - [Speaker enrollment and voiceprint calibration](issues/07-speaker-enrollment.md) — wespeaker resnet34-LM centroids (~30s calibration), tunnel-HTTPS mic for guests, SPEAKER_XX fallback
+- [Facilitator manners](issues/03-facilitator-manners.md) — full-participant-minus-Socrates; staleness quotes + self-cut; tally plumbing both modes; no digests/nudges
 
 ## Not yet specified
 
