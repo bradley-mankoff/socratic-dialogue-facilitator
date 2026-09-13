@@ -16,6 +16,7 @@ Buildable spec for a self-hosted (this Mac on-only) Socratic dialogue facilitato
 - [Canvas shape without inventing pan/zoom](issues/04-canvas-shape.md) — adopt Cytoscape.js (MIT, first-party PNG export + JSON round-trip)
 - [Live transcription + definition-search pipeline](issues/05-live-pipeline.md) — faster-whisper local int8 + Wiktionary-first chain with cite/dedup policy
 - [Migrate factory to Piyaz](issues/06-piyaz-migration.md) — project SDF live, factory.json tracker=piyaz, dry-run passes
+- [Board semantics for single toggleable board](issues/02-board-semantics.md) — modes renamed LLM-as-Socrates / LLM-as-participant / LLM-only-assists; universal-franchise majority votes; ambient tally; revision-by-new-node; toggle cut locked
 
 ## Not yet specified
 
@@ -31,4 +32,5 @@ Buildable spec for a self-hosted (this Mac on-only) Socratic dialogue facilitato
 - Rebuilding a Plato corpus or anchoring old dialogues (test fixture Justice excepted).
 - Privileging famous-philosopher definitions over highly-cited informal ones.
 - Always-on cloud hosting, multi-tenant auth, paid tunnels as the default path.
+- Non-definitional claims (empirical predictions etc.) — future direction, beyond this spec
 - Inventing interactive pan/zoom from scratch (adopt OSS).
