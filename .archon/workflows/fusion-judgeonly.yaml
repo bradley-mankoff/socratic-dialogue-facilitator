@@ -1,0 +1,35 @@
+name: fusion-judgeonly
+description: |
+  Fuse pre-existing panel plans without re-running planners.
+  Setup copies complete plans into this run's artifacts, then the
+  standard forced-fuse judge runs, then the fused plan is emitted.
+  Recovery path when panel workers die after writing plans.
+
+nodes:
+  - id: stage
+    bash: |
+      set -euo pipefail
+      SRC="/Users/bradley_mankoff/.local/share/archon-pi/archon-home/workspaces/_local/socratic-dialogue-facilitator/artifacts/runs/407b09b8-157b-428f-8b9b-c88fc8d2dcf6/plans"
+      mkdir -p "$ARTIFACTS_DIR/plans/a" "$ARTIFACTS_DIR/plans/b" "$ARTIFACTS_DIR/plans/c"
+      for p in a b c; do cp "$SRC/$p/PLAN.md" "$ARTIFACTS_DIR/plans/$p/"; cp "$SRC/$p/NOTES.md" "$ARTIFACTS_DIR/plans/$p/" 2>/dev/null || true; done
+      rm -f "$ARTIFACTS_DIR/fused-plan.md"
+
+  - id: judge-plan
+    command: fusion-judge-plan-fuse-forced
+    model: '@judge'
+    retry: {max_attempts: 5, delay_ms: 5000, on_error: all}
+    context: fresh
+    depends_on: [stage]
+    output_format:
+      type: object
+      properties:
+        verdict: { type: string }
+        mode: { type: string, enum: [fuse] }
+        chosen: { type: string, enum: [a, b, c] }
+      required: [verdict, mode, chosen]
+
+  - id: emit
+    bash: |
+      set -euo pipefail
+      cat "$ARTIFACTS_DIR/fused-plan.md"
+    depends_on: [judge-plan]
