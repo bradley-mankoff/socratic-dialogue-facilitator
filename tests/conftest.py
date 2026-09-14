@@ -1,5 +1,7 @@
 """Shared fixtures for the SDF-2 headless verdict suite."""
 
+import urllib.parse
+import urllib.request
 from types import SimpleNamespace
 
 import pytest
@@ -31,3 +33,25 @@ def make_env():
         return SimpleNamespace(machine=m, h=h, f=f, node=n, ce=ce, q=q)
 
     return _make
+
+
+_ORIGINAL_URLOPEN = urllib.request.urlopen
+
+
+def _is_loopback(url) -> bool:
+    target = url.full_url if hasattr(url, "full_url") else str(url)
+    host = urllib.parse.urlsplit(target).hostname or ""
+    return host in ("127.0.0.1", "localhost", "::1")
+
+
+@pytest.fixture(autouse=True)
+def no_live_network(monkeypatch):
+    """SDF-3: block real network calls; loopback transport tests still run."""
+
+    def guarded(url, *args, **kwargs):
+        if not _is_loopback(url):
+            raise AssertionError(f"tests must not touch the live network: {url!r}")
+        return _ORIGINAL_URLOPEN(url, *args, **kwargs)
+
+    monkeypatch.setattr(urllib.request, "urlopen", guarded)
+    yield

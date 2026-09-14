@@ -1,0 +1,24 @@
+{
+  "batchcomplete": "",
+  "query": {
+    "normalized": [{"from": "justice", "to": "Justice"}],
+    "pages": {
+      "56878": {
+        "pageid": 56878,
+        "ns": 0,
+        "title": "justice",
+        "revisions": [
+          {
+            "slots": {
+              "main": {
+                "contentmodel": "wikitext",
+                "contentformat": "text/x-wiki",
+                "*": "==English==\n\n===Etymology===\nFrom Middle English {{m|en|justice}}, borrowed from Old French {{m|fro|justice}}, from Latin {{m|la|iūstitia}}.\n\n===Noun===\n{{en-noun}}\n\n# The fair and honest administration of the law by individuals.\n#* {{quote-book|en|year=1905|text=The magistrate spoke of fairness and honesty.}}\n#: (quote context)\n# The fair and honest administration of the law by courts.\n# A judge of a court of law.\n\n==German==\n===Noun===\n# Gerechtigkeit\n"
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,7 @@
+[{"meta": {"id": "justice", "uuid": "00000000-0000-0000-0000-000000000000",
+           "sort": "justice", "source": "Collegiate", "stems": ["justice", "justices"],
+           "offensive": false},
+  "homographNumber": "0", "fl": "noun",
+  "shortdef": ["A judge of a court of law."],
+  "def": [{"vd": "noun",
+           "sseq": [[["sense", {"dt": [["text", "{bc}a judge of a court of law"]]}]]]}]}]
