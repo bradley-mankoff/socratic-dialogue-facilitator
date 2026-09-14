@@ -1,7 +1,7 @@
 {
   "tracker": "piyaz",
   "max_concurrent": 1,
-  "default_tactic": "oneshot",
+  "default_tactic": "fusion-02",
   "allow_fusion": true,
   "base_branch": "main",
   "gate": "pytest -q",
