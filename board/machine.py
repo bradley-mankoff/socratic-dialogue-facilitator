@@ -397,13 +397,15 @@ class VerdictMachine:
         if side is None:
             return
         self._commit("q_settled", {"q_id": q_id, "outcome": side})
+        if side != "for":
+            return
         if q.kind == "close":
             self.close_board(q_id)
         elif q.kind == "mode_switch":
             self.switch_mode(q_id, q.subject)
         # socrates_swap / active_claim_switch / ingress_selection /
-        # tiebreak: settle + record the outcome; effect wiring is
-        # downstream slices' (SDF-8), this slice records only.
+        # tiebreak: settle + record the outcome; SDF-8 logs the mandate at
+        # the service layer, so no journal effect fires here.
 
     # -- board + identities -------------------------------------------------
 
@@ -721,6 +723,8 @@ class VerdictMachine:
         "for". One board_closed event freezes every open Q, snapshots the
         unresolved tray and the finalized canvas, and closes the board."""
         self._require_board()
+        if self._state.status == "closed":
+            return      # SDF-8: the board is terminal; never snapshot twice
         q = self._get_q(q_id)
         if q.kind != "close" or q.status != "settled" or q.outcome != "for":
             raise VerdictError(
