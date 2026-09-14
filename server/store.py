@@ -8,14 +8,17 @@ store/registry.json                    boards + counter (small, atomic rewrite)
 store/canonicals/<slug(x_norm)>.json   one ChainResult.to_dict() per X
 store/<board_id>/journal.jsonl         SDF-2 verdict journal (machine-owned)
 store/<board_id>/meta.jsonl            SDF-5 sidecar (server-owned)
+store/<board_id>/system.jsonl          SDF-8 facilitator-blind system log
 ````
 
 Journals and sidecars share a board directory but never a file. That
 separation is load-bearing: ``board.machine._apply`` raises on unknown event
 types, so a single foreign line in ``journal.jsonl`` would permanently break
-replay and SDF-18 resume. ``MetaLog`` therefore subclasses :class:`JsonlStore`
-(identical fsync-per-append durability and torn-tail repair) with a different
-filename rather than writing into the journal.
+replay and SDF-18 resume. ``MetaLog`` and ``SystemLog`` therefore subclass
+:class:`JsonlStore` (identical fsync-per-append durability and torn-tail
+repair) with different filenames rather than writing into the journal. The
+system log is never rendered as a facilitator contribution (SDF-10 renders
+it as system lines via ``BoardService.read_system_log``).
 """
 
 from __future__ import annotations
@@ -44,6 +47,11 @@ REGISTRY_VERSION = 1
 DEFAULT_ROOT = Path("store")
 CANONICALS_DIRNAME = "canonicals"
 ALLOWED_MIRROR_FIELDS = ("mode", "medium", "status")
+
+# SDF-8 system-log event types (the only shapes ``SystemLog`` accepts).
+GOVERNANCE_OPENED = "governance_opened"
+GOVERNANCE_SETTLED = "governance_settled"
+SYSTEM_EVENT_TYPES: tuple[str, ...] = (GOVERNANCE_OPENED, GOVERNANCE_SETTLED)
 
 
 def registry_path(root: Path | str = DEFAULT_ROOT) -> Path:
@@ -337,9 +345,54 @@ class MetaLog(JsonlStore):
         return [e for e in events if e.get("type") == etype]
 
 
+class SystemLog(JsonlStore):
+    """Append-only facilitator-blind system log of governance events (SDF-8).
+
+    A fourth durable home beside ``journal.jsonl`` and ``meta.jsonl``: same
+    durability (fsync per append, torn-tail repair, ``read_all``) under its
+    own filename and its own per-board ``seq``. The machine never reads it;
+    the service never writes the journal. Entries carry question ids, move
+    subjects, outcomes and tallies only — never prose, never a speaker
+    display — so nothing in it can be rendered as a facilitator
+    contribution. SDF-10 renders it distinctly through
+    :meth:`server.service.BoardService.read_system_log`.
+    """
+
+    FILENAME = "system.jsonl"
+
+    def append_event(self, board_id: str, etype: str, payload: dict, *,
+                     ts: str | None = None) -> dict:
+        """Append one governance event; returns the stored envelope."""
+        if etype not in SYSTEM_EVENT_TYPES:
+            raise ValueError(
+                f"system log holds only {SYSTEM_EVENT_TYPES}, not {etype!r}")
+        events = self.read_all(board_id)
+        event = {
+            "seq": len(events) + 1,
+            "type": etype,
+            "board_id": board_id,
+            "ts": ts or now_iso(),
+            "payload": dict(payload),
+        }
+        self.append(board_id, event)
+        return event
+
+    def read_events(self, board_id: str,
+                    etype: str | None = None) -> list[dict]:
+        """All system events for a board, optionally filtered by type."""
+        if etype is not None and etype not in SYSTEM_EVENT_TYPES:
+            raise ValueError(
+                f"system log holds only {SYSTEM_EVENT_TYPES}, not {etype!r}")
+        events = self.read_all(board_id)
+        if etype is None:
+            return events
+        return [e for e in events if e.get("type") == etype]
+
+
 __all__ = [
     "REGISTRY_FILENAME", "REGISTRY_VERSION", "DEFAULT_ROOT",
     "CANONICALS_DIRNAME", "ALLOWED_MIRROR_FIELDS",
+    "GOVERNANCE_OPENED", "GOVERNANCE_SETTLED", "SYSTEM_EVENT_TYPES",
     "registry_path", "canonicals_dir", "canonical_path", "creation_key",
-    "BoardRegistry", "CanonicalStore", "MetaLog",
+    "BoardRegistry", "CanonicalStore", "MetaLog", "SystemLog",
 ]

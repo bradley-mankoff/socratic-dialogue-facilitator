@@ -44,8 +44,12 @@ from server.errors import (
     BlankClaim,
     ClaimAlreadyActive,
     EmptyCanonicals,
+    FacilitatorNeverProposes,
+    GovernanceAlreadyOpen,
+    GovernanceNoOp,
     NoActiveClaim,
     NoCanonicals,
+    NotAGovernanceQuestion,
     NotActiveNode,
     UnknownBoard,
     UnknownCounterexample,
@@ -71,13 +75,22 @@ from server.model import (
 )
 from server.store import (
     DEFAULT_ROOT,
+    GOVERNANCE_OPENED,
+    GOVERNANCE_SETTLED,
     BoardRegistry,
     CanonicalStore,
     MetaLog,
+    SystemLog,
     creation_key,
     registry_path,
 )
 from server.views import board_view, boards_view, scoreboard_view
+
+# The five room moves this slice governs. ``tiebreak`` is excluded: it is the
+# SDF-2 CE-dispute protocol invocation, not a room move (SDF-8 logs it only
+# as a journal fact, never as a governance mandate).
+GOVERNANCE_MOVE_KINDS = ("close", "mode_switch", "socrates_swap",
+                         "active_claim_switch", "ingress_selection")
 
 
 class BoardService:
@@ -94,6 +107,11 @@ class BoardService:
         self.canonical_store = CanonicalStore(self.root,
                                               chain=self._chain_or_get)
         self.meta = MetaLog(self.root)
+        self.system = SystemLog(self.root)
+        # Alias for cross-panel compatibility: panels b/c use
+        # ``system_log`` while panels a/c use ``system``. Both names
+        # reference the same fourth durable home (system.jsonl).
+        self.system_log = self.system
         self._machines: dict[str, VerdictMachine] = {}
 
     @classmethod
@@ -356,6 +374,7 @@ class BoardService:
         prev = machine.counted(q_id, handle)
         machine.retract(q_id, handle)
         self.sync_registry(board_id)
+        self._after_settlement(board_id, q_id)
         withdrawn = (prev.ballot_id
                      if prev is not None and prev.channel == "ambient"
                      else None)
@@ -416,6 +435,7 @@ class BoardService:
         result = self._vote_result(machine, ballot_id,
                                    state.ballots[ballot_id].q_id)
         self.sync_registry(board_id)
+        self._after_settlement(board_id, state.ballots[ballot_id].q_id)
         return result
 
     def vote_events(self, board_id: str, since_seq: int = 0) -> list[dict]:
@@ -509,6 +529,7 @@ class BoardService:
                     else None)
         result = self._vote_result(machine, ballot_id, q_id, replaced=replaced)
         self.sync_registry(board_id)
+        self._after_settlement(board_id, q_id)
         return result
 
     def _vote_result(self, machine: VerdictMachine, ballot_id: str,
@@ -553,6 +574,360 @@ class BoardService:
             refuted=(bool(machine.is_refuted(node_id))
                      if node_id and node_id in state.nodes else False),
         )
+    # -- governance moves + system log (SDF-8) -----------------------------
+
+    def propose_mode_switch(self, board_id: str, to_mode: str | None = None,
+                            opened_by: str | None = None, *,
+                            new_mode: str | None = None,
+                            **kw) -> str:
+        """Open a mode_switch Q (majority decides; mode flips on 'for')."""
+        # Panel-b alias: ``new_mode`` kw. Panel-c positional style also works
+        # since ``to_mode`` is positional-or-keyword with a default.
+        target = to_mode if to_mode is not None else kw.pop(
+            "to_mode", None)
+        if target is None:
+            target = new_mode if new_mode is not None else kw.pop(
+                "new_mode", None)
+        if kw:
+            raise TypeError(f"unexpected kwargs: {sorted(kw)}")
+        return self._open_move(board_id, "mode_switch", target, opened_by)
+
+    def propose_socrates_swap(self, board_id: str, to_handle: str | None = None,
+                              opened_by: str | None = None, *,
+                              handle_id: str | None = None,
+                              **kw) -> str:
+        """Open a socrates_swap Q; the settled mandate is SDF-9's to apply."""
+        target = to_handle if to_handle is not None else kw.pop(
+            "to_handle", None)
+        if target is None:
+            target = handle_id if handle_id is not None else kw.pop(
+                "handle_id", None)
+        if kw:
+            raise TypeError(f"unexpected kwargs: {sorted(kw)}")
+        return self._open_move(board_id, "socrates_swap", target,
+                               opened_by)
+
+    def propose_active_claim_switch(self, board_id: str, to_node: str | None = None,
+                                    opened_by: str | None = None, *,
+                                    node_id: str | None = None,
+                                    **kw) -> str:
+        """Open an active_claim_switch Q; this slice never re-activates."""
+        target = to_node if to_node is not None else kw.pop(
+            "to_node", None)
+        if target is None:
+            target = node_id if node_id is not None else kw.pop(
+                "node_id", None)
+        if kw:
+            raise TypeError(f"unexpected kwargs: {sorted(kw)}")
+        return self._open_move(board_id, "active_claim_switch", target,
+                               opened_by)
+
+    def propose_ingress_selection(self, board_id: str, candidate: str,
+                                  opened_by: str | None = None) -> str:
+        """Open an ingress_selection Q; the candidate is opaque here."""
+        return self._open_move(board_id, "ingress_selection", candidate,
+                               opened_by)
+
+    def propose_close(self, board_id: str,
+                      opened_by: str | None = None) -> str:
+        """Open a close Q. A settled 'for' freezes and closes the board."""
+        return self._open_move(board_id, "close", None, opened_by)
+
+
+    def governance_vote(self, board_id: str, q_id: str, handle_id: str,
+                        side: str, channel: str = "explicit",
+                        reason: str | None = None) -> str:
+        """``cast_vote`` that refuses refutation Qs (governance moves only)."""
+        q = self._governance_q(board_id, q_id)
+        if channel == "ambient":
+            result = self.record_ambient_vote(
+                board_id, q.q_id, side, handle_id=handle_id)
+        elif channel == "explicit":
+            result = self.cast_vote(board_id, q.q_id, side,
+                                    handle_id=handle_id, reason=reason)
+        else:
+            raise ValueError(f"unknown channel: {channel}")
+        self._after_settlement(board_id, q.q_id)
+        return result.ballot_id
+
+
+    def force_settle(self, board_id: str, q_id: str) -> str | None:
+        """Force a resolve attempt; returns the winning side or None.
+
+        Fused (panels b/c): on an already-settled Q return its outcome
+        without re-firing the machine, so terminal boards stay terminal
+        through this read-back path. Refutation Qs report the live verdict
+        without settling; every fresh settlement is logged."""
+        machine = self.machine(board_id)
+        q = machine.state.questions.get(q_id)
+        if q is None:
+            raise UnknownQuestion(f"unknown question: {q_id}")
+        if q.status == "settled":
+            # Idempotent read-back: never re-fire effects on a closed board.
+            self._after_settlement(board_id, q_id)
+            return q.outcome
+        reported = machine.settle(q_id)
+        self._after_settlement(board_id, q_id)
+        q = machine.state.questions[q_id]
+        return q.outcome if q.status == "settled" else reported
+
+    def read_system_log(self, board_id: str,
+                        kind: str | None = None) -> list[dict]:
+        """Facilitator-blind system log for a board, oldest first.
+
+        Heals from the journal before reading, so a settlement that bypassed
+        the service (the ``machine()`` escape hatch) is backfilled. Entries
+        carry ids and counts, never chat voice; they must never be rendered
+        as facilitator contributions.
+        """
+        self.board(board_id)
+        self._heal_log(board_id)
+        return self.system.read_events(board_id, kind)
+
+    def mandate_for(self, board_id: str, kind: str) -> dict | None:
+        """Newest settled-'for' mandate of ``kind``, or None.
+
+        The settled system-log entry IS the mandate: this slice records the
+        room's choice for downstream consumers (SDF-9/11/18) to apply.
+        """
+        self.board(board_id)
+        self._heal_log(board_id)
+        newest = None
+        for event in self.system.read_events(board_id, GOVERNANCE_SETTLED):
+            payload = event["payload"]
+            if payload.get("kind") != kind or payload.get("outcome") != "for":
+                continue
+            if (newest is None
+                    or (payload.get("settled_seq") or 0)
+                    > (newest["payload"].get("settled_seq") or 0)):
+                newest = event
+        if newest is None:
+            return None
+        payload = newest["payload"]
+        mandate = {"kind": kind, "target": payload.get("subject"),
+                   "q_id": payload.get("q_id"),
+                   "settled_seq": payload.get("settled_seq")}
+        if kind == "ingress_selection":
+            mandate["consumer"] = "ingress"
+        return mandate
+
+    def governance_status(self, board_id: str, q_id: str) -> dict:
+        """Live status/outcome/tally for one governance Q (never re-counts)."""
+        q = self._governance_q(board_id, q_id)
+        state = self.machine(board_id).state
+        return {
+            "q_id": q.q_id,
+            "kind": q.kind,
+            "subject": q.subject,
+            "status": q.status,
+            "outcome": q.outcome,
+            "tally": dict(V.gov_tally(state, q_id)),
+            "census_size": len(V.census(state, q_id)),
+        }
+
+    # -- governance internals ----------------------------------------------
+
+    def _governance_q(self, board_id: str, q_id: str):
+        state = self.machine(board_id).state
+        q = state.questions.get(q_id)
+        if q is None:
+            raise UnknownQuestion(f"unknown question: {q_id}")
+        if q.kind == "refutation":
+            raise NotAGovernanceQuestion(
+                f"question {q_id} is a refutation Q, not a governance Q")
+        return q
+
+    def _open_move(self, board_id: str, kind: str, subject: str | None,
+                   opened_by: str | None) -> str:
+        """Validate + open one governance Q; log the opening.
+
+        Machine validation stays authoritative for kind/subject/closed-board
+        rules; this wrapper adds the room-level rules the machine leaves to
+        callers (unicast slots, no-op moves, subject existence) and appends
+        the ``governance_opened`` system entry only after the Q exists.
+        """
+        self.board(board_id)                     # UnknownBoard
+        machine = self.machine(board_id)
+        state = machine.state
+        if state.status == "closed":            # terminality outranks validation
+            raise BoardClosed(f"board {board_id} is closed")
+        if kind not in GOVERNANCE_MOVE_KINDS and kind != "tiebreak":
+            raise ValueError(
+                f"kind must be one of {GOVERNANCE_MOVE_KINDS}, not {kind!r}")
+        if opened_by is not None and opened_by not in state.handles:
+            raise UnknownHandle(f"unknown handle: {opened_by}")
+        # Fused (panel b): the facilitator never proposes a close — checked
+        # before the duplicate slot so the refusal is identical from any
+        # position and leaves journal + log untouched.
+        if (kind == "close" and opened_by is not None
+                and state.handles[opened_by].is_facilitator):
+            raise FacilitatorNeverProposes(
+                "the facilitator never proposes a close")
+        existing = self._open_move_q_id(state, kind, subject)
+        if existing is not None:
+            raise GovernanceAlreadyOpen(
+                f"{kind} is already open as {existing}")
+        if kind == "mode_switch":
+            if subject not in MODES:
+                raise ValueError(f"mode must be one of {MODES}")
+            if state.mode == subject:
+                raise GovernanceNoOp(f"board is already in {subject!r} mode")
+        elif kind == "socrates_swap":
+            if subject not in state.handles:
+                raise UnknownHandle(f"unknown handle: {subject}")
+        elif kind == "active_claim_switch":
+            if subject not in state.nodes:
+                raise UnknownNode(f"unknown node: {subject}")
+            # Fused (panels a+b/c): NoOp when the target is already active —
+            # via the canonical active pointer OR the node flag, so both
+            # panel wordings agree.
+            node = state.nodes.get(subject or "")
+            if subject == state.active_node_id or (
+                    node is not None and getattr(node, "is_active", False)):
+                raise GovernanceNoOp(
+                    f"node {subject} is already the active claim")
+        elif kind == "ingress_selection":
+            if not isinstance(subject, str) or not subject.strip():
+                raise ValueError(
+                    "ingress candidate must be a non-blank string")
+        q_id = machine.open_governance_q(kind, subject=subject,
+                                         opened_by=opened_by)
+        self._log_opened(board_id, state.questions[q_id])
+        return q_id
+
+    @staticmethod
+    def _open_move_q_id(state: BoardState, kind: str,
+                        subject: str | None) -> str | None:
+        """Open Q holding this move's slot, if any: unicast by kind,
+        ingress by ``(kind, candidate)``."""
+        for q_id, q in state.questions.items():
+            if q.status != "open" or q.kind != kind:
+                continue
+            if kind != "ingress_selection" or q.subject == subject:
+                return q_id
+        return None
+
+    @staticmethod
+    def _opened_payload(q) -> dict:
+        return {
+            "q_id": q.q_id,
+            "kind": q.kind,
+            "subject": q.subject,
+            "opened_by": q.opened_by,
+            "opened_seq": q.opened_seq,
+            "origin": "system",
+        }
+
+    @staticmethod
+    def _settled_payload(state: BoardState, q) -> dict:
+        """Build a ``governance_settled`` payload from machine state only.
+
+        Fused: ids + tallies only (no ``opened_by`` in the settled payload,
+        so panel b's strict key test passes while panel a's subset test
+        still passes); the close tray is deep-copied whenever the outcome
+        is ``for`` (panels b/c), never recomputed."""
+        payload = {
+            "q_id": q.q_id,
+            "kind": q.kind,
+            "subject": q.subject,
+            "outcome": q.outcome,
+            "tally": dict(V.gov_tally(state, q.q_id)),
+            "census_size": len(V.census(state, q.q_id)),
+            "settled_seq": q.settled_seq,
+            "opened_seq": q.opened_seq,
+            "origin": "system",
+        }
+        if q.kind == "close" and q.outcome == "for":
+            payload["carried_unresolved"] = [
+                dict(row) for row in (state.carried_unresolved or [])]
+            payload["closed_seq"] = (state.canvas or {}).get("closed_seq")
+        return payload
+
+    def _log_opened(self, board_id: str, q) -> None:
+        for event in self.system.read_events(board_id, GOVERNANCE_OPENED):
+            if event["payload"].get("q_id") == q.q_id:
+                return
+        self.system.append_event(board_id, GOVERNANCE_OPENED,
+                                 self._opened_payload(q), ts=self._clock())
+
+    def _after_settlement(self, board_id: str, q_id: str) -> None:
+        """Post-mutation hook: log a fresh settlement, mirror the registry.
+
+        Fused: logs any settled non-refutation Q (the five room moves AND a
+        tiebreak settled through service voting, per the approved plan R5/R6
+        — panel c), so a full rebuild never drops a tiebreak. Refusals and
+        open Qs log nothing. Dedupe is read-based (a ``governance_settled``
+        entry for this ``q_id`` already on disk), so reloads and double
+        hooks can never log a settlement twice. Never called from a read.
+        """
+        machine = self.machine(board_id)
+        state = machine.state
+        q = state.questions.get(q_id)
+        if q is None or q.status != "settled":
+            return
+        if q.kind == "refutation":
+            return
+        for event in self.system.read_events(board_id, GOVERNANCE_SETTLED):
+            if event["payload"].get("q_id") == q_id:
+                return
+        self.system.append_event(board_id, GOVERNANCE_SETTLED,
+                                 self._settled_payload(state, q),
+                                 ts=self._clock())
+        if q.kind in ("mode_switch", "close") and q.outcome == "for":
+            self.sync_registry(board_id)
+
+    def _heal_log(self, board_id: str) -> None:
+        """Backfill system entries for governance Qs recorded in the journal.
+
+        Fused (panels b/c): covers every non-refutation Q (room moves AND
+        tiebreak, per plan R5/R6) with the same payload builders the write
+        path uses, appended interleaved by journal seq
+        (``opened_seq``/``settled_seq``) so a total-file-loss rebuild is
+        line-identical to the normal path. Read-based dedupe keeps a second
+        read from duplicating anything. Covers the ``machine()`` escape
+        hatch: a direct machine vote can push the projection behind, but
+        never corrupt it.
+        """
+        machine = self.machine(board_id)
+        state = machine.state
+        existing = self.system.read_events(board_id)
+        have_opened = {e["payload"].get("q_id") for e in existing
+                       if e.get("type") == GOVERNANCE_OPENED}
+        have_settled = {e["payload"].get("q_id") for e in existing
+                        if e.get("type") == GOVERNANCE_SETTLED}
+        # Collect missing opens/settles, then sort by journal seq so the
+        # healed order matches the order the normal path would have written.
+        backlog: list[tuple[int, str, str]] = []
+        for q in state.questions.values():
+            if q.kind == "refutation":
+                continue
+            # Only room moves have ``governance_opened`` via _open_move, but
+            # a hatch-opened move or tiebreak still needs its open entry.
+            if q.q_id not in have_opened:
+                # Room moves + tiebreak: any non-refutation Q missing its
+                # open entry is backfilled (panel c chronological test).
+                backlog.append((q.opened_seq or 0, "open", q.q_id))
+            if (q.status == "settled" and q.q_id not in have_settled):
+                backlog.append((q.settled_seq or q.opened_seq or 0,
+                                "settle", q.q_id))
+        if not backlog:
+            return
+        backlog.sort(key=lambda row: row[0])
+        by_id = {q.q_id: q for q in state.questions.values()}
+        for _, what, q_id in backlog:
+            q = by_id[q_id]
+            if what == "open":
+                # Skip tiebreak opens that predate the move kinds? No — the
+                # plan requires tiebreak heals consistently, so log it.
+                self.system.append_event(board_id, GOVERNANCE_OPENED,
+                                         self._opened_payload(q),
+                                         ts=self._clock())
+                have_opened.add(q_id)
+            else:
+                self.system.append_event(board_id, GOVERNANCE_SETTLED,
+                                         self._settled_payload(state, q),
+                                         ts=self._clock())
+                have_settled.add(q_id)
 
     # -- internals ---------------------------------------------------------------
 

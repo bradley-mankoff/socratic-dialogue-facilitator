@@ -16,6 +16,7 @@ from board.machine import (  # noqa: F401  (re-export is the point)
     BoardClosed,
     DuplicateTiebreak,
     FacilitatorCannotVote,
+    FacilitatorNeverProposes,
     GovernanceNotSettled,
     ModeSwitchNotSettled,
     NoBoard,
@@ -69,6 +70,19 @@ class DuplicateLabel(BoardOpError):
     treats a taken key as the get path)."""
 
 
+class GovernanceAlreadyOpen(BoardOpError):
+    """A unicast governance move (or one ingress candidate) is already an
+    open question; the message names the existing ``q_id``."""
+
+
+class GovernanceNoOp(BoardOpError):
+    """The move would change nothing (same mode / already-active claim)."""
+
+
+class NotAGovernanceQuestion(BoardOpError):
+    """A governance-only call was aimed at a refutation question."""
+
+
 __all__ = [
     "BoardOpError",
     "UnknownBoard",
@@ -79,6 +93,9 @@ __all__ = [
     "ClaimAlreadyActive",
     "BlankClaim",
     "DuplicateLabel",
+    "GovernanceAlreadyOpen",
+    "GovernanceNoOp",
+    "NotAGovernanceQuestion",
     # re-exported from the SDF-2 machine
     "BoardClosed",
     "BoardAlreadyExists",
@@ -94,6 +111,7 @@ __all__ = [
     "SideMismatch",
     "QNotOpen",
     "FacilitatorCannotVote",
+    "FacilitatorNeverProposes",
     "UnknownQuestion",
     "UnknownHandle",
     "UnknownNode",
