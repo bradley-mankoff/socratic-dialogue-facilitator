@@ -1,0 +1,41 @@
+name: fusion-impl-judgeonly
+description: |
+  Fuse completed implementation panels without re-running dead ones.
+  Setup stages reports plus panel trees from a prior run into this
+  run's artifacts (with factual stubs for missing pieces), then the
+  standard forced-fuse impl judge runs, then the fused tree is listed.
+  Recovery path when a panel worker dies mid-implementation.
+  Direct run: apply the fused tree by hand, verify, commit, PR.
+
+nodes:
+  - id: stage
+    bash: |
+      set -euo pipefail
+      SRC="/Users/bradley_mankoff/.local/share/archon-pi/archon-home/workspaces/_local/socratic-dialogue-facilitator/artifacts/runs/61aa4183-0032-46ce-9375-c276aa1ca92f"
+      mkdir -p "$ARTIFACTS_DIR/reports" "$ARTIFACTS_DIR/panels/a" "$ARTIFACTS_DIR/panels/c"
+      cp "$SRC/reports/a.md" "$ARTIFACTS_DIR/reports/a.md"
+      cp -a "$SRC/panels/a/." "$ARTIFACTS_DIR/panels/a/"
+      cp -a "$SRC/panels/c/." "$ARTIFACTS_DIR/panels/c/"
+      printf '# Panel b stood down\n\nNo usable output: worker completed with an empty tree and no report. Judge candidates a and c only.\n' > "$ARTIFACTS_DIR/reports/b.md"
+      printf '# Panel c (partial)\n\nWorker died provider-side mid-implementation (Anthropic stream cut, zero further output). Tree below is complete as far as it got; no report was written. Evaluate the code as-is.\n' > "$ARTIFACTS_DIR/reports/c.md"
+      rm -rf "$ARTIFACTS_DIR/fused"
+
+  - id: judge
+    command: fusion-judge-impl-fuse-forced
+    model: '@judge'
+    retry: {max_attempts: 5, delay_ms: 5000, on_error: all}
+    context: fresh
+    depends_on: [stage]
+    output_format:
+      type: object
+      properties:
+        verdict: { type: string }
+        mode: { type: string, enum: [fuse] }
+        chosen: { type: string, enum: [a, b, c] }
+      required: [verdict, mode, chosen]
+
+  - id: emit
+    bash: |
+      set -euo pipefail
+      find "$ARTIFACTS_DIR/fused" -type f | head -n 40
+    depends_on: [judge]
