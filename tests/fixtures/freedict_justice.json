@@ -1,0 +1,15 @@
+[{"word": "justice",
+  "phonetic": "ˈdʒʌstɪs",
+  "phonetics": [{"text": "ˈdʒʌstɪs", "audio": ""}],
+  "origin": "Middle English justice, borrowed from Old French justice, from Latin iūstitia.",
+  "meanings": [
+    {"partOfSpeech": "noun",
+     "definitions": [
+       {"definition": "The fair and honest administration of the law.",
+        "example": "Justice was served.", "synonyms": [], "antonyms": []},
+       {"definition": "A judge of a court of law.",
+        "example": "Her honor was a judge of the supreme court.", "synonyms": [], "antonyms": []}]},
+    {"partOfSpeech": "verb",
+     "definitions": [
+       {"definition": "To punish a person appropriately for an offense.",
+        "synonyms": [], "antonyms": []}]}]}]
