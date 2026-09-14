@@ -9,10 +9,10 @@ nodes:
   - id: stage
     bash: |
       set -euo pipefail
-      SRC="/Users/bradley_mankoff/.local/share/archon-pi/archon-home/workspaces/_local/socratic-dialogue-facilitator/artifacts/runs/a949e1e287a143626569e3f1dd53d1a8/plans"
+      SRC="/Users/bradley_mankoff/.local/share/archon-pi/archon-home/workspaces/_local/socratic-dialogue-facilitator/artifacts/runs/ba621ca7ce8217eb1fcec8fc802392b0/plans"
       mkdir -p "$ARTIFACTS_DIR/plans/a" "$ARTIFACTS_DIR/plans/b" "$ARTIFACTS_DIR/plans/c"
       for p in a b c; do cp "$SRC/$p/PLAN.md" "$ARTIFACTS_DIR/plans/$p/" 2>/dev/null || true; cp "$SRC/$p/NOTES.md" "$ARTIFACTS_DIR/plans/$p/" 2>/dev/null || true; done
-      printf '# Panel A stood down\n\nPeak-hours degradation (deepseek worker deaths, user-directed): no panel-a draft exists in this run. Fuse candidates b and c only.\n' > "$ARTIFACTS_DIR/plans/a/PLAN.md"
+      printf '# Panel A stood down\n\nSilent worker death 19 min after start (third deepseek failure across runs; model resolves, worker never writes). Fuse candidates b and c only.\n' > "$ARTIFACTS_DIR/plans/a/PLAN.md"
       rm -f "$ARTIFACTS_DIR/fused-plan.md"
 
   - id: judge-plan
