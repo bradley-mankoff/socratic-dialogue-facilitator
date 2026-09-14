@@ -11,13 +11,13 @@ nodes:
   - id: stage
     bash: |
       set -euo pipefail
-      SRC="/Users/bradley_mankoff/.local/share/archon-pi/archon-home/workspaces/_local/socratic-dialogue-facilitator/artifacts/runs/61aa4183-0032-46ce-9375-c276aa1ca92f"
-      mkdir -p "$ARTIFACTS_DIR/reports" "$ARTIFACTS_DIR/panels/a" "$ARTIFACTS_DIR/panels/c"
-      cp "$SRC/reports/a.md" "$ARTIFACTS_DIR/reports/a.md"
-      cp -a "$SRC/panels/a/." "$ARTIFACTS_DIR/panels/a/"
+      SRC="/Users/bradley_mankoff/.local/share/archon-pi/archon-home/workspaces/_local/socratic-dialogue-facilitator/artifacts/runs/1fd1dab0-09b4-4b59-9f6d-551dc08a87bc"
+      mkdir -p "$ARTIFACTS_DIR/reports" "$ARTIFACTS_DIR/panels/b" "$ARTIFACTS_DIR/panels/c"
+      cp "$SRC/reports/b.md" "$ARTIFACTS_DIR/reports/b.md"
+      cp "$SRC/reports/c.md" "$ARTIFACTS_DIR/reports/c.md"
+      cp -a "$SRC/panels/b/." "$ARTIFACTS_DIR/panels/b/"
       cp -a "$SRC/panels/c/." "$ARTIFACTS_DIR/panels/c/"
-      printf '# Panel b stood down\n\nNo usable output: worker completed with an empty tree and no report. Judge candidates a and c only.\n' > "$ARTIFACTS_DIR/reports/b.md"
-      printf '# Panel c (partial)\n\nWorker died provider-side mid-implementation (Anthropic stream cut, zero further output). Tree below is complete as far as it got; no report was written. Evaluate the code as-is.\n' > "$ARTIFACTS_DIR/reports/c.md"
+      printf '# Panel A stood down\n\nIdle-timeout death after retries (deepseek worker never emitted; user-directed 2-lane degradation history). Fuse candidates b and c only.\n' > "$ARTIFACTS_DIR/reports/a.md"
       rm -rf "$ARTIFACTS_DIR/fused"
 
   - id: judge
