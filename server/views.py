@@ -148,7 +148,139 @@ def boards_view(records: list) -> list[dict[str, Any]]:
     } for r in records]
 
 
+# -- SDF-6 live scoreboard (pure reads over the machine's verdicts) ---------
+
+
+def vote_rows(machine, q_id: str) -> list[dict[str, Any]]:
+    """Who voted what on one question (AC4): every Ballot on ``q_id``,
+    oldest-first by ``(receive_time, seq)`` — the exact order the machine
+    uses to pick each handle's counted ballot.
+
+    ``is_counted`` is the machine's counted-ballot decision for that handle
+    (latest explicit beats any ambient; withdrawals invisible). Withdrawn
+    ballots render ``withdrawn=True, is_counted=False``; the ballot they
+    displaced (e.g. an older ambient) may still count.
+    """
+    state = machine.state
+    # Fused from panel a: unknown questions render empty instead of
+    # raising KeyError (V.counted raises on unknown q) — views never crash.
+    counted_by_handle: dict[str, str] = {}
+    for handle_id, ballot in (V.counted(state, q_id)
+                               if q_id in state.questions else {}).items():
+        counted_by_handle[handle_id] = ballot.ballot_id
+    rows: list[dict[str, Any]] = []
+    for b in sorted(
+            (b for b in state.ballots.values() if b.q_id == q_id),
+            key=lambda b: (b.receive_time, b.seq)):
+        rows.append({
+            "ballot_id": b.ballot_id,
+            "handle_id": b.handle_id,
+            # Fused from panel a: missing handles render None, never KeyError.
+            "display": (state.handles[b.handle_id].display
+                        if b.handle_id in state.handles else None),
+            "channel": b.channel,
+            "side": b.side,
+            "reason": b.reason,
+            "labeled": bool(b.labeled),
+            "receive_time": b.receive_time,
+            "seq": b.seq,
+            "is_counted": counted_by_handle.get(b.handle_id) == b.ballot_id,
+            "withdrawn": bool(b.withdrawn),
+        })
+    return rows
+
+
+def _tiebreak_view(machine, ce) -> dict[str, Any]:
+    """Tiebreak-invoke governance block for one CE row (story 20).
+
+    ``invoked`` mirrors ``ce.tiebreak_invoked`` (set once, at invocation);
+    ``voter``/``side``/``reason`` describe the one labeled facilitator ballot
+    and stay ``None`` until it is cast.
+    """
+    state = machine.state
+    none_block: dict[str, Any] = {
+        "invoked": False, "q_id": None, "status": None, "outcome": None,
+        "ballot_id": None, "voter": None, "display": None, "side": None,
+        "reason": None, "votes": [],
+    }
+    if not ce.tiebreak_invoked:
+        return none_block
+    tb_q = next(
+        (q for q in state.questions.values()
+         if q.kind == "tiebreak" and q.subject == ce.ce_id), None)
+    if tb_q is None:
+        return none_block
+    ballot = state.ballots.get(ce.tiebreak_ballot_id) \
+        if ce.tiebreak_ballot_id is not None else None
+    voter = ballot.handle_id if ballot is not None else None
+    return {
+        "invoked": True,
+        "q_id": tb_q.q_id,
+        "status": tb_q.status,
+        "outcome": tb_q.outcome,
+        "ballot_id": ce.tiebreak_ballot_id,
+        "voter": voter,
+        "display": (state.handles[voter].display
+                    if voter is not None else None),
+        "side": ballot.side if ballot is not None else None,
+        "reason": ballot.reason if ballot is not None else None,
+        "votes": vote_rows(machine, tb_q.q_id),
+    }
+
+
+def ce_rows(machine, node_id: str) -> list[dict[str, Any]]:
+    """Live scoreboard rows for every CE attached to ``node_id`` (AC4).
+
+    One row per CE in attachment order; every number is read from
+    :mod:`board.verdicts` over the live state, never recomputed here."""
+    state = machine.state
+    node = state.nodes[node_id]
+    rows: list[dict[str, Any]] = []
+    for ce_id in node.ce_ids:
+        ce = state.ces[ce_id]
+        q = state.questions[ce.q_id]
+        tally = dict(V.tally(state, ce.q_id))
+        opened_by = q.opened_by
+        rows.append({
+            "ce_id": ce.ce_id,
+            "shape": ce.shape,
+            "q_id": ce.q_id,
+            "q_status": q.status,
+            "opened_by": opened_by,
+            "display": (state.handles[opened_by].display
+                        if opened_by is not None else None),
+            "tally": tally,
+            "census_size": len(V.census(state, ce.q_id)),
+            "is_standing": bool(V.is_standing(state, ce.ce_id)),
+            "is_refuted": bool(V.ce_is_refuted(state, ce.ce_id)),
+            "outcome": V.refutation_outcome(state, ce.ce_id),
+            "tie_exemption": V.tie_exemption_handle(state, ce.q_id),
+            "decisive_side": V.decisive_side(state, ce.q_id),
+            "votes": vote_rows(machine, ce.q_id),
+            "tiebreak": _tiebreak_view(machine, ce),
+        })
+    return rows
+
+
+def scoreboard_view(machine, node_id: str) -> dict[str, Any]:
+    """Live scoreboard for one claim node: header verdict + CE rows (AC4).
+
+    ``is_refuted`` is the machine's node-level predicate (some attached CE
+    refutes under the strict census-majority rule); ``node_status`` is the
+    stored status the machine keeps fresh on every tally change."""
+    state = machine.state
+    return {
+        "board_id": state.board_id,
+        "node_id": node_id,
+        "claim_id": node_id,
+        "node_status": state.nodes[node_id].status,
+        "is_refuted": bool(V.is_refuted(state, node_id)),
+        "ces": ce_rows(machine, node_id),
+    }
+
+
 __all__ = [
     "NOT_PULLED", "node_view", "question_view", "canonicals_view",
     "board_view", "boards_view",
+    "vote_rows", "ce_rows", "scoreboard_view",
 ]

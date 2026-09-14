@@ -31,10 +31,19 @@ from server.errors import (
     BoardOpError,
     ClaimAlreadyActive,
     DuplicateLabel,
+    DuplicateTiebreak,
     EmptyCanonicals,
+    FacilitatorCannotVote,
     NoActiveClaim,
     NoCanonicals,
+    NotActiveNode,
+    QNotOpen,
+    SideMismatch,
+    TiebreakNotPassed,
     UnknownBoard,
+    UnknownCounterexample,
+    UnknownHandle,
+    UnknownQuestion,
     UnknownSense,
 )
 from server.model import (
@@ -43,10 +52,14 @@ from server.model import (
     OPS_EVENT_TYPES,
     SOURCE_TAG,
     TRAY_NAME,
+    VOTE_EVENT_TYPES,
+    AllegationResult,
     BoardRecord,
     ClaimProvenance,
     ClaimResult,
     OpenResult,
+    TiebreakResult,
+    VoteResult,
     make_board_id,
     next_label,
     now_iso,
@@ -66,8 +79,11 @@ from server.views import (
     board_view,
     boards_view,
     canonicals_view,
+    ce_rows,
     node_view,
     question_view,
+    scoreboard_view,
+    vote_rows,
 )
 
 __all__ = [
@@ -75,18 +91,22 @@ __all__ = [
     "BoardService",
     # data shapes
     "BoardRecord", "ClaimProvenance", "ClaimResult", "OpenResult",
+    "AllegationResult", "VoteResult", "TiebreakResult",
     # durable homes
     "BoardRegistry", "CanonicalStore", "MetaLog", "DEFAULT_ROOT",
     "REGISTRY_FILENAME", "registry_path", "canonicals_dir",
     # constants + helpers
     "CLAIM_RECORDED", "CLAIM_REVISED", "OPS_EVENT_TYPES", "TRAY_NAME",
+    "VOTE_EVENT_TYPES",
     "SOURCE_TAG", "slug", "make_board_id", "next_label", "now_iso",
     # views
     "board_view", "boards_view", "canonicals_view", "node_view",
-    "question_view",
+    "question_view", "vote_rows", "ce_rows", "scoreboard_view",
     # errors (slice + re-exported machine errors)
     "BoardOpError", "UnknownBoard", "NoCanonicals", "EmptyCanonicals",
     "UnknownSense", "NoActiveClaim", "ClaimAlreadyActive", "BlankClaim",
     "DuplicateLabel", "BoardClosed", "NoBoard", "NodeFrozen", "VerdictError",
     "UnknownHandle", "UnknownNode", "UnknownQuestion",
+    "UnknownCounterexample", "DuplicateTiebreak", "TiebreakNotPassed",
+    "SideMismatch", "QNotOpen", "FacilitatorCannotVote", "NotActiveNode",
 ]

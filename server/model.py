@@ -33,6 +33,13 @@ SOURCE_TAG = "dictionary-chain"
 
 CLAIM_KINDS: tuple[str, ...] = ("canonical", "original")
 
+# Journal event types the SDF-6 scrutiny API surfaces to SDF-14 (story 21).
+# Read straight from ``journal.jsonl`` — the machine stays the only writer
+# and no vote event is ever copied into the claim-only ``meta.jsonl``.
+VOTE_EVENT_TYPES: tuple[str, ...] = (
+    "ballot_cast", "retraction", "tiebreak_ballot_cast",
+)
+
 
 def now_iso() -> str:
     """UTC ISO-8601 timestamp; injectable as ``clock`` for determinism."""
@@ -271,6 +278,131 @@ def original_provenance(*, node_id: str,
     )
 
 
+@dataclass(frozen=True)
+class AllegationResult:
+    """Outcome of ``allege``: one CE + its 1:1 refutation Q (story 15)."""
+
+    board_id: str
+    node_id: str
+    ce_id: str
+    q_id: str
+    shape: str                 # "3a" | "3b"
+    opened_by: str | None      # handle_id or None (anonymous)
+    opened_seq: int            # state.questions[q_id].opened_seq
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "board_id": self.board_id,
+            "node_id": self.node_id,
+            "ce_id": self.ce_id,
+            "q_id": self.q_id,
+            "shape": self.shape,
+            "opened_by": self.opened_by,
+            "opened_seq": self.opened_seq,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "AllegationResult":
+        return cls(
+            board_id=d["board_id"],
+            node_id=d["node_id"],
+            ce_id=d["ce_id"],
+            q_id=d["q_id"],
+            shape=d["shape"],
+            opened_by=d.get("opened_by"),
+            opened_seq=d["opened_seq"],
+        )
+
+
+@dataclass(frozen=True)
+class VoteResult:
+    """Outcome of one ballot ingestion (stories 16–17, 20)."""
+
+    board_id: str
+    node_id: str
+    ce_id: str | None          # CE subject on refutation + tiebreak Qs
+    q_id: str
+    ballot_id: str
+    handle_id: str
+    display: str
+    channel: str               # "explicit" | "ambient"
+    side: str                  # stands|rebutted (refutation) / for|against
+    reason: str | None
+    counted: bool              # machine.counted(q_id, handle) is this ballot
+    replaced_ballot_id: str | None
+    seq: int                   # journal seq of the ballot event
+    refuted: bool              # machine.is_refuted(node_id) AFTER the vote
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "board_id": self.board_id,
+            "node_id": self.node_id,
+            "ce_id": self.ce_id,
+            "q_id": self.q_id,
+            "ballot_id": self.ballot_id,
+            "handle_id": self.handle_id,
+            "display": self.display,
+            "channel": self.channel,
+            "side": self.side,
+            "reason": self.reason,
+            "counted": self.counted,
+            "replaced_ballot_id": self.replaced_ballot_id,
+            "seq": self.seq,
+            "refuted": self.refuted,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "VoteResult":
+        return cls(
+            board_id=d["board_id"],
+            node_id=d["node_id"],
+            ce_id=d.get("ce_id"),
+            q_id=d["q_id"],
+            ballot_id=d["ballot_id"],
+            handle_id=d["handle_id"],
+            display=d["display"],
+            channel=d["channel"],
+            side=d["side"],
+            reason=d.get("reason"),
+            # Fused from panel a: coerce JSON 0/1 back to bool on reload.
+            counted=bool(d["counted"]),
+            replaced_ballot_id=d.get("replaced_ballot_id"),
+            seq=d["seq"],
+            refuted=bool(d["refuted"]),
+        )
+
+
+@dataclass(frozen=True)
+class TiebreakResult:
+    """Outcome of ``invoke_tiebreak``: the governance Q a room votes on
+    (story 20). The ballot itself is ``cast_tiebreak_ballot`` → VoteResult."""
+
+    board_id: str
+    ce_id: str
+    tiebreak_q_id: str
+    opened_by: str | None
+    opened_seq: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "board_id": self.board_id,
+            "ce_id": self.ce_id,
+            "tiebreak_q_id": self.tiebreak_q_id,
+            "opened_by": self.opened_by,
+            "opened_seq": self.opened_seq,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "TiebreakResult":
+        return cls(
+            board_id=d["board_id"],
+            ce_id=d["ce_id"],
+            tiebreak_q_id=d["tiebreak_q_id"],
+            opened_by=d.get("opened_by"),
+            opened_seq=d["opened_seq"],
+        )
+
+
 def build_claim_recorded(payload: dict) -> dict:
     """Event body for a recorded claim (payload only; ``MetaLog`` adds the
     ``seq``/``board_id``/``ts`` envelope)."""
@@ -284,9 +416,11 @@ def build_claim_revised(payload: dict) -> dict:
 
 __all__ = [
     "CLAIM_RECORDED", "CLAIM_REVISED", "OPS_EVENT_TYPES", "TRAY_NAME",
-    "SOURCE_TAG", "CLAIM_KINDS", "MODES", "MEDIA", "Mode", "Medium",
+    "SOURCE_TAG", "CLAIM_KINDS", "VOTE_EVENT_TYPES", "MODES", "MEDIA",
+    "Mode", "Medium",
     "now_iso", "slug", "make_board_id", "next_label",
     "BoardRecord", "ClaimProvenance", "ClaimResult", "OpenResult",
+    "AllegationResult", "VoteResult", "TiebreakResult",
     "canonical_provenance", "original_provenance",
     "build_claim_recorded", "build_claim_revised",
 ]
