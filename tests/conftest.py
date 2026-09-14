@@ -55,3 +55,52 @@ def no_live_network(monkeypatch):
 
     monkeypatch.setattr(urllib.request, "urlopen", guarded)
     yield
+
+
+# ---------------------------------------------------------------------------
+# SDF-5 — board operations (registry + canonical cache + claim/revise).
+# Everything is stubbed: no live HTTP, no shared fixtures with earlier suites.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sdf5_store(tmp_path):
+    """Fresh data root for one service."""
+    return tmp_path / "store"
+
+
+@pytest.fixture
+def sdf5_stub():
+    """Counting transport over the Justice fixtures."""
+    from tests.sdf5_stubs import justice_stub
+
+    return justice_stub()
+
+
+@pytest.fixture
+def sdf5_svc(sdf5_store, sdf5_stub):
+    """Board service over the stubbed chain with a deterministic clock."""
+    from tests.sdf5_stubs import make_service
+
+    return make_service(sdf5_store, chain=_sdf5_chain(sdf5_stub))
+
+
+def _sdf5_chain(stub):
+    from dictionary.chain import build_default_chain
+
+    return build_default_chain(stub, clock=lambda: "2026-09-13")
+
+
+HUMAN_DISPLAYS = ("Cephalus", "Polemarchus", "Thrasymachus")
+
+
+@pytest.fixture
+def sdf5_open(sdf5_svc):
+    """Board ``justice`` with three human handles already enrolled."""
+    opened = sdf5_svc.open_board("Justice")
+    machine = sdf5_svc.machine(opened.board_id)
+    handles = {display: machine.enroll_handle(display) for display in HUMAN_DISPLAYS}
+    return SimpleNamespace(
+        service=sdf5_svc, board_id=opened.board_id, record=opened.record,
+        view=opened.view, machine=machine, h=handles,
+    )
