@@ -44,6 +44,7 @@ from server.errors import (
     BlankClaim,
     ClaimAlreadyActive,
     EmptyCanonicals,
+    FacilitatorHoldsNoSeat,
     FacilitatorNeverProposes,
     GovernanceAlreadyOpen,
     GovernanceNoOp,
@@ -247,6 +248,74 @@ class BoardService:
                                     claimant_display=claimant_display,
                                     in_response_to=in_response_to,
                                     revision=True)
+
+    # -- roles / seats (SDF-9) ------------------------------------------------
+
+    def offer_defense(self, board_id: str, to_handle: str, *,
+                      by: str) -> dict:
+        """The active defender names a successor; nothing moves until
+        accept (AC2). Handle refs resolve by exact id or display, never
+        auto-enroll; the machine re-validates everything.
+
+        Fused a+b: panel a's machine-direct call plus panel b's caller
+        ergonomics — returns ``{"board_id", "from", "to", "node_id"}``
+        (the committed payload) and syncs the registry mirror. The
+        idempotent re-offer returns the original event's payload shape, so
+        callers can read ``offered["to"]`` either way."""
+        self.board(board_id)                      # UnknownBoard
+        machine = self.machine(board_id)
+        raw = machine.offer_defense(
+            self._resolve_existing_handle(machine, to_handle),
+            self._resolve_existing_handle(machine, by))
+        payload = raw["payload"] if "payload" in raw else raw
+        self.sync_registry(board_id)
+        return {"board_id": board_id, **payload}
+
+    def accept_defense(self, board_id: str, *, by: str) -> dict:
+        """The offered target accepts; the active claim's defense moves.
+
+        Fused a+b: same payload-plus-board_id shape as
+        :meth:`offer_defense`."""
+        self.board(board_id)
+        machine = self.machine(board_id)
+        raw = machine.accept_defense(
+            self._resolve_existing_handle(machine, by))
+        payload = raw["payload"] if "payload" in raw else raw
+        self.sync_registry(board_id)
+        return {"board_id": board_id, **payload}
+
+    def decline_defense(self, board_id: str, *, by: str) -> dict:
+        """The offered target declines; pending clears, defense stays.
+
+        Fused from panel c's lifecycle: logs ``defense_cede_declined``.
+        Only the offered ``to`` handle may decline."""
+        self.board(board_id)
+        machine = self.machine(board_id)
+        raw = machine.decline_defense(
+            self._resolve_existing_handle(machine, by))
+        payload = raw["payload"] if "payload" in raw else raw
+        self.sync_registry(board_id)
+        return {"board_id": board_id, **payload}
+
+    def withdraw_defense(self, board_id: str, *, by: str) -> dict:
+        """The offerer withdraws; pending clears, defense stays.
+
+        Fused from panel c's lifecycle: logs ``defense_cede_withdrawn``.
+        Only the recorded ``from`` handle may withdraw."""
+        self.board(board_id)
+        machine = self.machine(board_id)
+        raw = machine.withdraw_defense(
+            self._resolve_existing_handle(machine, by))
+        payload = raw["payload"] if "payload" in raw else raw
+        self.sync_registry(board_id)
+        return {"board_id": board_id, **payload}
+
+    def roles(self, board_id: str) -> dict:
+        """Fused from panel c: pure seat snapshot for headers/pickers."""
+        self.board(board_id)
+        machine = self.machine(board_id)
+        from server.views import roles_view as _roles_view
+        return _roles_view(machine.state)
 
     # -- provenance / ops log -------------------------------------------------
 
@@ -503,6 +572,23 @@ class BoardService:
             if handle.display == by_display:
                 return hid
         return machine.enroll_handle(str(by_display), kind="enrolled")
+
+    @staticmethod
+    def _resolve_existing_handle(machine: VerdictMachine, ref: str) -> str:
+        """Exact handle-id or exact-display lookup; never auto-enroll.
+
+        SDF-9 cede paths name existing players only (a typo must refuse, not
+        silently mint an identity): :class:`UnknownHandle` on any miss.
+        """
+        state = machine.state
+        if not isinstance(ref, str) or not ref.strip():
+            raise ValueError("handle id or display required")
+        if ref in state.handles:
+            return ref
+        for handle_id, handle in state.handles.items():
+            if handle.display == ref:
+                return handle_id
+        raise UnknownHandle(f"unknown handle: {ref}")
 
     def _ingest_vote(self, board_id: str, q_id: str, channel: str,
                      side: str, *, by_display: str | None = None,
@@ -980,8 +1066,14 @@ class BoardService:
         pending = self._pending_refutations(state, prev)
         node_id = self._next_node_id(state)
         claimed_by = self._ensure_handle(machine, claimant_display)
+        if (claimed_by is not None
+                and machine.state.handles[claimed_by].is_facilitator
+                and machine.state.mode != "participates"):
+            raise FacilitatorHoldsNoSeat(
+                "the facilitator cannot hold the defense outside "
+                "participates mode")             # G2
 
-        machine.register_node(node_id, text)  # the ONLY canvas mutation
+        machine.register_node(node_id, text, defender=claimed_by)  # canvas
 
         # Nothing past this point may raise: a failure between the journal
         # append and the sidecar append would desync the two logs.

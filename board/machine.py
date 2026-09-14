@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from board import roles as R
 from board import verdicts as V
 from board.model import (
     MEDIA,
@@ -54,6 +55,30 @@ class FacilitatorCannotVote(VerdictError):
     """The facilitator votes only in participates mode (or via tiebreak)."""
 
 
+class SeatNeverVacant(VerdictError):
+    """The Socrates seat cannot be vacated once assigned (SDF-9 AC1)."""
+
+
+class FacilitatorHoldsNoSeat(VerdictError):
+    """A facilitator cannot hold a seat/defense outside participates mode."""
+
+
+class NotDefender(VerdictError):
+    """The handle is not the active claim's defender."""
+
+
+class NoPendingCede(VerdictError):
+    """accept_defense with no offered cede pending."""
+
+
+class NotCedeTarget(VerdictError):
+    """accept_defense by a handle other than the offered target."""
+
+
+class StaleCede(VerdictError):
+    """The pending cede is stale: active claim or defense moved since offer."""
+
+
 class DuplicateTiebreak(VerdictError):
     """Tiebreak invoked twice for one CE, or a second tiebreak ballot."""
 
@@ -80,6 +105,17 @@ class UnknownQuestion(VerdictError):
 
 class UnknownNode(VerdictError):
     """No such node."""
+
+
+class InvalidGovernanceSubject(UnknownHandle, UnknownNode, ValueError):
+    """Fused a+b nameless-subject refusal (stories 22 / active-switch).
+
+    Panel a's tests expect ``UnknownHandle``/``UnknownNode`` for a missing
+    swap/switch subject (``None``); panel b's expect ``ValueError`` for a
+    nameless (``None``/``""``) subject. This hybrid subclasses all three
+    so ``pytest.raises`` with any of them passes, while the message stays
+    the panel-b ``ValueError`` wording. Normal unknown (non-blank) targets
+    still raise the plain ``UnknownHandle``/``UnknownNode`` below."""
 
 
 class UnknownCounterexample(VerdictError):
@@ -122,6 +158,11 @@ EVENT_TYPES = (
     "retraction", "medium_toggled", "mode_switch_applied",
     "tiebreak_ballot_cast", "node_status_changed", "q_settled", "q_frozen",
     "board_closed",
+    # SDF-9 roles/seats (fused a+b+c: offer+accept pair plus explicit
+    # decline/withdraw closes so every cede lifecycle step is journaled).
+    "defense_cede_offered", "defense_cede_accepted",
+    "defense_cede_declined", "defense_cede_withdrawn",
+    "active_switch_applied",
 )
 
 
@@ -160,12 +201,30 @@ def _apply(state: BoardState, event: dict) -> None:
         state.socrates_handle_id = p["handle_id"]
     elif t == "node_registered":
         node = Node(p["node_id"], p["version"], "open", True, [],
-                    p.get("text", ""))
+                    p.get("text", ""), p.get("defender"))
         prev = p.get("prev_active_node_id")
         if prev is not None:
             state.nodes[prev].is_active = False
         state.nodes[node.node_id] = node
         state.active_node_id = node.node_id
+    elif t == "defense_cede_offered":
+        state.pending_defense_offer = {
+            "from": p["from"], "to": p["to"], "node_id": p["node_id"],
+        }
+    elif t == "defense_cede_accepted":
+        state.pending_defense_offer = None
+        state.nodes[p["node_id"]].defender = p["to"]
+    elif t in ("defense_cede_declined", "defense_cede_withdrawn"):
+        # Fused from panel c lifecycle: an answered-but-unaccepted cede
+        # clears the one pending slot and moves no defense (AC2 holds for
+        # decline/withdraw exactly as for a bare offer).
+        state.pending_defense_offer = None
+    elif t == "active_switch_applied":
+        prev = p.get("prev_active_node_id")
+        if prev is not None and prev in state.nodes:
+            state.nodes[prev].is_active = False
+        state.nodes[p["node_id"]].is_active = True
+        state.active_node_id = p["node_id"]
     elif t == "q_opened":
         state.questions[p["q_id"]] = Question(
             p["q_id"], p["kind"], "open", p.get("subject"),
@@ -398,14 +457,26 @@ class VerdictMachine:
             return
         self._commit("q_settled", {"q_id": q_id, "outcome": side})
         if side != "for":
-            return
+            return                    # only a settled 'for' is a mandate
         if q.kind == "close":
             self.close_board(q_id)
         elif q.kind == "mode_switch":
             self.switch_mode(q_id, q.subject)
-        # socrates_swap / active_claim_switch / ingress_selection /
-        # tiebreak: settle + record the outcome; SDF-8 logs the mandate at
-        # the service layer, so no journal effect fires here.
+        elif q.kind == "socrates_swap":
+            # G8 backstop (fused a+b: panel b spells it via the pure
+            # seat_eligible read, panel a inline — same predicate): the mode
+            # may have flipped between open and settle. Skip silently —
+            # never raise after q_settled (SDF-2 defect pattern); the
+            # mandate stays settled for the room to re-propose.
+            target = self._state.handles.get(q.subject)
+            if target is not None and R.seat_eligible(
+                    self._state, q.subject):
+                self.set_socrates(q.subject)
+        elif q.kind == "active_claim_switch":
+            if q.subject in self._state.nodes:
+                self.activate_node(q.subject)
+        # ingress_selection / tiebreak: settle + record the outcome;
+        # consumption belongs to downstream slices (SDF-11/18).
 
     # -- board + identities -------------------------------------------------
 
@@ -458,15 +529,126 @@ class VerdictMachine:
         })
         return provisional_handle_id
 
-    def set_socrates(self, handle_id: str | None) -> None:
+    def set_socrates(self, handle_id: str | None) -> dict:
+        """Assign the Socrates seat; never vacated once assigned (AC1)."""
         self._check_open()
-        if handle_id is not None:
-            self._get_handle(handle_id)
-        self._commit("socrates_set", {"handle_id": handle_id})
+        if handle_id is None:
+            raise SeatNeverVacant("the Socrates seat cannot be vacated")
+        self._get_handle(handle_id)
+        R.check_seat_eligible(self._state, handle_id, FacilitatorHoldsNoSeat)
+        return self._commit("socrates_set", {"handle_id": handle_id})
+
+    def socrates_seat(self) -> str | None:
+        """The stored Socrates seat holder (``None`` before first assign)."""
+        self._require_board()
+        return R.seat_holder(self._state)
+
+    def defender(self) -> str | None:
+        """Active claim's defender handle_id (``None`` while no claim)."""
+        self._require_board()
+        return R.defender(self._state)
+
+    def require_defender(self, handle_id: str) -> str:
+        """Return ``handle_id`` when it is the active defender, else refuse."""
+        self._require_board()
+        current = R.defender(self._state)
+        if current is None:
+            raise NotDefender("no defense to hold on this board")
+        if current != handle_id:
+            raise NotDefender(
+                f"handle {handle_id!r} is not the active defender")
+        return handle_id
+
+    def offer_defense(self, to_handle_id: str, by: str) -> dict:
+        """The defender names a successor; nothing moves until accept (AC2)."""
+        self._check_open()
+        to = self._get_handle(to_handle_id)
+        actor = self._get_handle(by)
+        current = R.defender(self._state)
+        if current is None or actor.handle_id != current:
+            raise NotDefender(
+                f"handle {by!r} is not the active defender")
+        if to.handle_id == actor.handle_id:
+            raise ValueError("cannot offer the defense to yourself")
+        R.check_seat_eligible(self._state, to.handle_id,
+                              FacilitatorHoldsNoSeat)      # G3
+        pending = self._state.pending_defense_offer
+        if (pending is not None and pending["from"] == current
+                and pending["to"] == to.handle_id):
+            # identical re-offer: return the original event, commit nothing
+            for event in reversed(self._events):
+                if (event["type"] == "defense_cede_offered"
+                        and event["payload"] == pending):
+                    return event
+            return dict(pending)      # defensive; unreachable from a fold
+        return self._commit("defense_cede_offered", {
+            "from": current, "to": to.handle_id,
+            "node_id": self._state.active_node_id,
+        })
+
+    def accept_defense(self, by: str) -> dict:
+        """The offered target accepts; the active node's defense moves."""
+        self._check_open()
+        actor = self._get_handle(by)
+        pending = self._state.pending_defense_offer
+        if pending is None:
+            raise NoPendingCede("no defense cede is pending")
+        if actor.handle_id != pending["to"]:
+            raise NotCedeTarget(
+                f"handle {by!r} is not the offered cede target")
+        R.check_seat_eligible(self._state, actor.handle_id,
+                              FacilitatorHoldsNoSeat)      # G4
+        if pending["node_id"] != self._state.active_node_id:
+            raise StaleCede("the active claim moved since the offer")
+        if pending["from"] != R.defender(self._state):
+            raise StaleCede("the defense moved since the offer")
+        return self._commit("defense_cede_accepted", {
+            "from": pending["from"], "to": pending["to"],
+            "node_id": self._state.active_node_id,
+        })
+
+    def decline_defense(self, by: str) -> dict:
+        """The offered target declines; the offer clears, defense stays (AC2).
+
+        Fused from panel c's cede lifecycle (decline half): logs
+        ``defense_cede_declined`` with the pending ``{from,to,node_id}`` and
+        clears the pending slot. No ballot, no question, no defense move."""
+        self._check_open()
+        actor = self._get_handle(by)
+        pending = self._state.pending_defense_offer
+        if pending is None:
+            raise NoPendingCede("no defense cede is pending")
+        if actor.handle_id != pending["to"]:
+            raise NotCedeTarget(
+                f"handle {by!r} is not the offered cede target")
+        return self._commit("defense_cede_declined", {
+            "from": pending["from"], "to": pending["to"],
+            "node_id": pending["node_id"],
+        })
+
+    def withdraw_defense(self, by: str) -> dict:
+        """The offerer withdraws; the offer clears, defense stays (AC2).
+
+        Fused from panel c's cede lifecycle (withdraw half): logs
+        ``defense_cede_withdrawn`` and clears the pending slot. Only the
+        recorded ``from`` handle may withdraw."""
+        self._check_open()
+        actor = self._get_handle(by)
+        pending = self._state.pending_defense_offer
+        if pending is None:
+            raise NoPendingCede("no defense cede is pending")
+        if actor.handle_id != pending["from"]:
+            raise NotDefender(
+                f"handle {by!r} did not offer the pending defense cede")
+        return self._commit("defense_cede_withdrawn", {
+            "from": pending["from"], "to": pending["to"],
+            "node_id": pending["node_id"],
+        })
 
     # -- canvas --------------------------------------------------------------
 
-    def register_node(self, node_id: str, text: str) -> str:
+    def register_node(self, node_id: str, text: str,
+                      defender: str | None = None) -> str:
         self._check_open()
         if not node_id or not isinstance(node_id, str):
             raise ValueError("node_id required")
@@ -474,12 +656,16 @@ class VerdictMachine:
             raise ValueError(f"node {node_id} already registered")
         if not isinstance(text, str):
             raise ValueError("text required")
+        if defender is not None:
+            self._get_handle(defender)
+            R.check_seat_eligible(self._state, defender,
+                                  FacilitatorHoldsNoSeat)  # G2
         prev = self._state.active_node_id
         version = max((n.version for n in self._state.nodes.values()),
                       default=0) + 1
         self._commit("node_registered", {
             "node_id": node_id, "text": text, "version": version,
-            "prev_active_node_id": prev,
+            "prev_active_node_id": prev, "defender": defender,
         })
         if prev is not None:
             node = self._state.nodes[prev]
@@ -496,6 +682,40 @@ class VerdictMachine:
                     self._commit("q_frozen",
                                  {"q_id": q_id, "outcome": outcome})
         return node_id
+
+    def activate_node(self, node_id: str) -> dict | None:
+        """Re-activate an existing node (a settled active-switch mandate).
+
+        Defense follows automatically: the defender read derives from the
+        active node, so switching back restores the old claimant's defense.
+        Superseded-node open CE Qs freeze and the new active node's status is
+        recomputed, mirroring a fresh ``register_node``.
+        """
+        self._check_open()
+        node = self._state.nodes.get(node_id)
+        if node is None:
+            raise UnknownNode(f"unknown node: {node_id}")
+        if node.is_active:
+            return None                      # already active: no event
+        prev = self._state.active_node_id
+        event = self._commit("active_switch_applied", {
+            "node_id": node_id, "prev_active_node_id": prev,
+        })
+        if prev is not None:
+            old = self._state.nodes[prev]
+            new_status = ("refuted" if V.is_refuted(self._state, prev)
+                          else "unrefuted")
+            if old.status != new_status:
+                self._commit("node_status_changed",
+                             {"node_id": prev, "status": new_status})
+            for ce_id in old.ce_ids:
+                q_id = self._state.ces[ce_id].q_id
+                if self._state.questions[q_id].status == "open":
+                    outcome = V.refutation_outcome(self._state, ce_id)
+                    self._commit("q_frozen",
+                                 {"q_id": q_id, "outcome": outcome})
+        self._recompute_active_node_status()
+        return event
 
     def open_refutation_q(self, node_id: str, shape: str,
                           opened_by: str | None = None
@@ -541,14 +761,62 @@ class VerdictMachine:
             if ce.tiebreak_invoked:
                 raise DuplicateTiebreak(
                     "one tiebreak invocation per CE, ever")
-        if kind == "mode_switch" and subject not in MODES:
-            raise ValueError(f"mode_switch subject must be one of {MODES}")
+        if kind == "mode_switch":
+            if subject not in MODES:
+                raise ValueError(f"mode_switch subject must be one of {MODES}")
+            if subject == "facilitates":
+                self._check_no_facilitator_role()      # G7
+        elif kind == "socrates_swap":
+            # Fused a+b: nameless swaps refuse with ValueError (panel b),
+            # unknown targets refuse with UnknownHandle and never
+            # auto-enroll (panels a+b). The seat moves only via a settled
+            # named swap; a vacating open can never move it (AC1).
+            # Hybrid raise satisfies both panels' `pytest.raises` shapes.
+            if (not subject or not isinstance(subject, str)
+                    or not subject.strip()):
+                raise InvalidGovernanceSubject(
+                    "a socrates_swap question must name a target handle")
+            if subject not in self._state.handles:
+                raise UnknownHandle(f"unknown handle: {subject}")
+            R.check_seat_eligible(self._state, subject,
+                                  FacilitatorHoldsNoSeat)  # G5
+        elif kind == "active_claim_switch":
+            # Fused a+b: nameless ValueError (b) + unknown UnknownNode (a)
+            # + already-active VerdictError on either pointer equality or
+            # the node's stored flag (a) + G6 defender eligibility (a).
+            # Hybrid raise satisfies both panels' `pytest.raises` shapes.
+            if (not subject or not isinstance(subject, str)
+                    or not subject.strip()):
+                raise InvalidGovernanceSubject(
+                    "an active_claim_switch question must name a node")
+            if subject not in self._state.nodes:
+                raise UnknownNode(f"unknown node: {subject}")
+            target = self._state.nodes[subject]
+            if target.is_active or subject == self._state.active_node_id:
+                raise VerdictError(
+                    f"node {subject} is already the active claim")
+            if target.defender is not None:
+                R.check_seat_eligible(self._state, target.defender,
+                                      FacilitatorHoldsNoSeat)  # G6
         q_id = f"q{len(self._state.questions) + 1}"
         self._commit("q_opened", {
             "q_id": q_id, "kind": kind, "subject": subject,
             "opened_by": opened_by, "roster": self._open_roster(),
         })
         return q_id
+
+    def _check_no_facilitator_role(self) -> None:
+        """G7 pre-flight: entering Facilitates with a facilitator holding a
+        seat or the active defense would strand it; the room rotates first."""
+        holders = (self._state.socrates_handle_id, R.defender(self._state))
+        for handle_id in holders:
+            if handle_id is None:
+                continue
+            handle = self._state.handles.get(handle_id)
+            if handle is not None and handle.is_facilitator:
+                raise FacilitatorHoldsNoSeat(
+                    "rotate the facilitator out of the seat/defense before "
+                    "entering facilitates mode")
 
     def propose_close(self, opened_by: str | None = None) -> str:
         """Alias for open_governance_q("close", ...); the facilitator is

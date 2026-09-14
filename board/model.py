@@ -165,6 +165,7 @@ class Node:
     is_active: bool           # exactly one active at a time
     ce_ids: list[str]
     text: str = ""            # claim text (register_node's text argument)
+    defender: str | None = None   # SDF-9: role-holder = active claimant
 
     def to_dict(self) -> dict[str, Any]:
         return _asdict(self)
@@ -178,6 +179,7 @@ class Node:
             is_active=d["is_active"],
             ce_ids=list(d.get("ce_ids", [])),
             text=d.get("text", ""),
+            defender=d.get("defender"),
         )
 
 
@@ -198,6 +200,9 @@ class BoardState:
     socrates_handle_id: str | None = None
     carried_unresolved: list[dict] | None = None  # tray snapshot at close
     canvas: dict | None = None                    # finalized canvas snapshot
+    # SDF-9: one pending defense cede per board
+    # {"from": handle_id, "to": handle_id, "node_id": active_at_offer} | None
+    pending_defense_offer: dict | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -216,6 +221,7 @@ class BoardState:
             "socrates_handle_id": self.socrates_handle_id,
             "carried_unresolved": self.carried_unresolved,
             "canvas": self.canvas,
+            "pending_defense_offer": self.pending_defense_offer,
         }
 
     @classmethod
@@ -238,4 +244,5 @@ class BoardState:
             socrates_handle_id=d.get("socrates_handle_id"),
             carried_unresolved=d.get("carried_unresolved"),
             canvas=d.get("canvas"),
+            pending_defense_offer=d.get("pending_defense_offer"),
         )
