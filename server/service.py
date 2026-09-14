@@ -1,14 +1,21 @@
-"""BoardService — SDF-5 board operations end to end.
+"""BoardService — SDF-5 board operations end to end + SDF-6 scrutiny.
 
 The public API: open a board on ``(X, label)``, pick its mode, pull/serve
-canonical definitions, claim one (source-tagged) or author an original, and
-revise the active claim into a new version node.
+canonical definitions, claim one (source-tagged) or author an original,
+revise the active claim into a new version node — then allege labeled
+counterexamples, ingest explicit/ambient ballots, retract ambient ones,
+run tiebreak-invoke governance, and read the live scoreboard.
 
-Division of authority (downstream SDF-6/7/10/11/18 depend on this):
+Division of authority (downstream SDF-7/10/14/18 depend on this):
 
 * **Verdict state** is owned by ``board.machine.VerdictMachine`` and its
   per-board ``journal.jsonl``. This module is the *only* caller of
-  ``register_node`` in the slice and never writes a verdict event itself.
+  ``register_node`` in the slice and never writes a verdict event itself;
+  the SDF-6 scrutiny methods stay thin: resolve → one machine mutator →
+  shape the result → ``sync_registry`` on the four verdict-affecting paths
+  (``cast_vote``, ``record_ambient_vote``, ``retract_vote``,
+  ``cast_tiebreak_ballot``) and never on reads or on ``allege``/
+  ``invoke_tiebreak`` (they cannot move a mirror).
 * **Provenance and the revision (tray) event** live in the ``meta.jsonl``
   sidecar (:class:`server.store.MetaLog`). The machine never reads it and
   this module never appends to the journal — ``board.machine._apply`` raises
@@ -29,7 +36,7 @@ from typing import Callable
 
 import board.verdicts as V
 from board.machine import BoardClosed, VerdictMachine
-from board.model import MEDIA, MODES, BoardState
+from board.model import MEDIA, MODES, SHAPES, BoardState
 from board.store import JsonlStore
 from dictionary.chain import DictionaryChain, build_default_chain
 from dictionary.normalize import normalize_x
@@ -39,16 +46,25 @@ from server.errors import (
     EmptyCanonicals,
     NoActiveClaim,
     NoCanonicals,
+    NotActiveNode,
     UnknownBoard,
+    UnknownCounterexample,
+    UnknownHandle,
+    UnknownNode,
+    UnknownQuestion,
     UnknownSense,
 )
 from server.model import (
     CLAIM_RECORDED,
     CLAIM_REVISED,
     TRAY_NAME,
+    VOTE_EVENT_TYPES,
+    AllegationResult,
     BoardRecord,
     ClaimResult,
     OpenResult,
+    TiebreakResult,
+    VoteResult,
     canonical_provenance,
     now_iso,
     original_provenance,
@@ -61,7 +77,7 @@ from server.store import (
     creation_key,
     registry_path,
 )
-from server.views import board_view, boards_view
+from server.views import board_view, boards_view, scoreboard_view
 
 
 class BoardService:
@@ -249,6 +265,294 @@ class BoardService:
 
     def boards_list(self, x: str | None = None) -> list[dict]:
         return boards_view(self.list_boards(x))
+
+    # -- scrutiny API (SDF-6): allege CEs, ingest votes, render scores ------
+
+    def allege(self, board_id: str, shape: str, *, node_id: str | None = None,
+               by_display: str | None = None,
+               handle_id: str | None = None) -> AllegationResult:
+        """Attach a labeled counterexample (``"3a"`` IS-X-but-fails or
+        ``"3b"`` fits-but-NOT-X) to a claim node; the CE and its refutation
+        question are 1:1 and the ballot opens immediately (AC1, story 15).
+
+        Target resolution happens BEFORE any handle enrollment: default is
+        the active claim, ``node_id`` names an explicit target, a claimless
+        board is :class:`NoActiveClaim` and an unknown or superseded node is
+        refused (unknown → :class:`UnknownNode`, inactive →
+        :class:`NotActiveNode`). The alleger may be anonymous; a display is
+        resolved once or enrolled. No ``sync_registry`` (opening a CE cannot
+        move a mirror) and no sidecar write (claim events only).
+        """
+        self.board(board_id)
+        machine = self.machine(board_id)
+        state = machine.state
+        if shape not in SHAPES:
+            raise ValueError(f"shape must be one of {SHAPES}")
+        target = node_id if node_id is not None else state.active_node_id
+        if target is None:
+            raise NoActiveClaim(
+                f"board {board_id} has no active claim to allege against")
+        if target not in state.nodes:
+            raise UnknownNode(f"unknown node: {target}")
+        if not state.nodes[target].is_active:
+            raise NotActiveNode(
+                f"node {target} is not the active claim; history is frozen")
+        handle = self._resolve_handle(machine, handle_id, by_display,
+                                      required=False)
+        ce_id, q_id = machine.open_refutation_q(target, shape, opened_by=handle)
+        return AllegationResult(
+            board_id=board_id, node_id=target, ce_id=ce_id, q_id=q_id,
+            shape=shape, opened_by=handle,
+            opened_seq=machine.state.questions[q_id].opened_seq,
+        )
+
+    def cast_vote(self, board_id: str, q_id: str, side: str, *,
+                  by_display: str | None = None,
+                  handle_id: str | None = None, reason: str | None = None,
+                  receive_time: float | None = None) -> VoteResult:
+        """One explicit ballot through the machine (stories 16, 18, 21).
+
+        Sides are machine vocabulary (``stands|rebutted`` on refutation Qs,
+        ``for|against`` on governance Qs) and are never validated here. The
+        counted ballot is the latest explicit by ``(receive_time, seq)``;
+        re-voting is legal and latest-counts. ``refuted`` is the live node
+        verdict *after* this vote — refutation Qs never settle."""
+        return self._ingest_vote(
+            board_id, q_id, "explicit", side, by_display=by_display,
+            handle_id=handle_id, reason=reason, receive_time=receive_time)
+
+    def record_ambient_vote(self, board_id: str, q_id: str, side: str, *,
+                            by_display: str | None = None,
+                            handle_id: str | None = None,
+                            receive_time: float | None = None) -> VoteResult:
+        """One ambient hook call per vote utterance, transcript order
+        (SDF-14 contract, story 17).
+
+        ``receive_time`` is the caller's transcript clock; omit it only for
+        "now" (the machine defaults to ``seq + 1``). The service never
+        reorders, buffers or drops; explicit ballots outrank ambient ones in
+        both arrival orders (machine-owned precedence)."""
+        return self._ingest_vote(board_id, q_id, "ambient", side,
+                                 by_display=by_display, handle_id=handle_id,
+                                 receive_time=receive_time)
+
+    def retract_vote(self, board_id: str, q_id: str, *,
+                     by_display: str | None = None,
+                     handle_id: str | None = None) -> dict:
+        """Ambient-only retraction (story 17).
+
+        Withdraws the handle's counted ambient ballot so the older ambient
+        (if any) resurfaces; an explicit ballot is never demoted, so
+        retracting an explicit-only handle or nothing is a no-op with
+        ``had_effect=False`` — changing an explicit vote means casting a new
+        one. Frozen questions refuse with :class:`QNotOpen`.
+        """
+        self.board(board_id)
+        machine = self.machine(board_id)
+        state = machine.state
+        if q_id not in state.questions:
+            raise UnknownQuestion(f"unknown question: {q_id}")
+        handle = self._resolve_handle(machine, handle_id, by_display)
+        prev = machine.counted(q_id, handle)
+        machine.retract(q_id, handle)
+        self.sync_registry(board_id)
+        withdrawn = (prev.ballot_id
+                     if prev is not None and prev.channel == "ambient"
+                     else None)
+        return {
+            "board_id": board_id,
+            "q_id": q_id,
+            "handle_id": handle,
+            "display": state.handles[handle].display,
+            "withdrawn_ballot_id": withdrawn,
+            "had_effect": withdrawn is not None,
+        }
+
+    def invoke_tiebreak(self, board_id: str, ce_id: str, *,
+                        by_display: str | None = None,
+                        handle_id: str | None = None) -> TiebreakResult:
+        """Open the tiebreak governance Q for one CE (story 20).
+
+        Machine-enforced: facilitates mode only (plain :class:`VerdictError`
+        otherwise), the CE must exist (:class:`UnknownCounterexample`), and
+        one invocation per CE, ever (:class:`DuplicateTiebreak`). The room
+        then votes ``for|against`` on ``tiebreak_q_id``; the machine settles
+        it on a strict census majority or the 1-human exemption.
+        """
+        self.board(board_id)
+        machine = self.machine(board_id)
+        state = machine.state
+        if ce_id not in state.ces:
+            raise UnknownCounterexample(f"unknown ce: {ce_id}")
+        handle = self._resolve_handle(machine, handle_id, by_display,
+                                      required=False)
+        q_id = machine.open_governance_q("tiebreak", subject=ce_id,
+                                         opened_by=handle)
+        return TiebreakResult(
+            board_id=board_id, ce_id=ce_id, tiebreak_q_id=q_id,
+            opened_by=handle,
+            opened_seq=machine.state.questions[q_id].opened_seq,
+        )
+
+    def cast_tiebreak_ballot(self, board_id: str, ce_id: str,
+                             reason: str) -> VoteResult:
+        """The one labeled, reasoned facilitator ballot on the CE's
+        refutation question (story 20).
+
+        Only after that CE's tiebreak Q settled ``for``
+        (:class:`TiebreakNotPassed`); exactly one, ever
+        (:class:`DuplicateTiebreak`); no ``side`` parameter — the machine
+        fixes ``rebutted`` (a lost vote cannot be bypassed into a refutation;
+        a tie lands on not-refuted). The ballot counts in the tally but takes
+        no census seat in facilitates mode.
+        """
+        self.board(board_id)
+        machine = self.machine(board_id)
+        state = machine.state
+        if ce_id not in state.ces:
+            raise UnknownCounterexample(f"unknown ce: {ce_id}")
+        ballot_id = machine.tiebreak_ballot(ce_id, reason)
+        node_id = state.ces[ce_id].node_id
+        result = self._vote_result(machine, ballot_id,
+                                   state.ballots[ballot_id].q_id)
+        self.sync_registry(board_id)
+        return result
+
+    def vote_events(self, board_id: str, since_seq: int = 0) -> list[dict]:
+        """Journal-sourced vote feed for SDF-14 (story 21).
+
+        Every ``ballot_cast`` / ``retraction`` / ``tiebreak_ballot_cast``
+        event after ``since_seq``, ascending. Pure read off
+        ``journal.jsonl`` — never copied into the claim-only ``meta.jsonl``
+        and never a new journal type. Journal seq and ``meta.jsonl`` seq are
+        independent: correlate by ``ballot_id``/``ce_id``, not seq.
+        """
+        self.board(board_id)
+        return [{"seq": e["seq"], "type": e["type"], "payload": e["payload"]}
+                for e in self.journals.read_all(board_id)
+                if e["type"] in VOTE_EVENT_TYPES and e["seq"] > since_seq]
+
+    def scoreboard(self, board_id: str, node_id: str | None = None) -> dict:
+        """Live scoreboard for one claim node (AC4, SDF-10's payload).
+
+        Default scope is the active claim; an explicit ``node_id`` wins
+        (score any node, including frozen history). Claimless boards are
+        :class:`NoActiveClaim`; unknown nodes :class:`UnknownNode`.
+        JSON-able by construction: ``json.loads(json.dumps(sb)) == sb``.
+        """
+        self.board(board_id)
+        machine = self.machine(board_id)
+        state = machine.state
+        target = node_id if node_id is not None else state.active_node_id
+        if target is None:
+            raise NoActiveClaim(
+                f"board {board_id} has no active claim to score")
+        if target not in state.nodes:
+            raise UnknownNode(f"unknown node: {target}")
+        return scoreboard_view(machine, target)
+
+    # -- scrutiny internals ---------------------------------------------------
+
+    @staticmethod
+    def _resolve_handle(machine: VerdictMachine, handle_id: str | None,
+                        by_display: str | None, *,
+                        required: bool = True) -> str | None:
+        """Exactly one of ``handle_id``/``by_display`` (``handle_id`` wins).
+
+        Known displays resolve to their existing handle so one claimant is
+        never split into two identities; unknown displays enroll once. With
+        ``required=False`` (alleger / tiebreak invoker) a blank or absent
+        display is anonymous ``None``; with ``required=True`` (voters) it is
+        a :class:`ValueError`.
+        """
+        state = machine.state
+        if handle_id is not None:
+            if handle_id not in state.handles:
+                raise UnknownHandle(f"unknown handle: {handle_id}")
+            return handle_id
+        if by_display is None:
+            if required:
+                raise ValueError(
+                    "a voter handle is required (handle_id or by_display)")
+            return None
+        if not isinstance(by_display, str) or not by_display.strip():
+            if required:
+                raise ValueError("by_display must be a non-blank string")
+            return None
+        for hid, handle in state.handles.items():
+            if handle.display == by_display:
+                return hid
+        return machine.enroll_handle(str(by_display), kind="enrolled")
+
+    def _ingest_vote(self, board_id: str, q_id: str, channel: str,
+                     side: str, *, by_display: str | None = None,
+                     handle_id: str | None = None, reason: str | None = None,
+                     receive_time: float | None = None) -> VoteResult:
+        """Shared body of ``cast_vote`` / ``record_ambient_vote": resolve,
+        one machine call, shape the result, sync the registry mirrors."""
+        self.board(board_id)
+        machine = self.machine(board_id)
+        state = machine.state
+        if q_id not in state.questions:
+            raise UnknownQuestion(f"unknown question: {q_id}")
+        handle = self._resolve_handle(machine, handle_id, by_display)
+        prev = machine.counted(q_id, handle)
+        if channel == "explicit":
+            ballot_id = machine.cast(q_id, handle, channel, side,
+                                     reason=reason,
+                                     receive_time=receive_time)
+        else:
+            ballot_id = machine.record_ambient(q_id, handle, side,
+                                               receive_time=receive_time)
+        replaced = (prev.ballot_id
+                    if prev is not None and prev.ballot_id != ballot_id
+                    else None)
+        result = self._vote_result(machine, ballot_id, q_id, replaced=replaced)
+        self.sync_registry(board_id)
+        return result
+
+    def _vote_result(self, machine: VerdictMachine, ballot_id: str,
+                     q_id: str, replaced: str | None = None) -> VoteResult:
+        """Shape a :class:`VoteResult` from the machine's post-state."""
+        state = machine.state
+        ballot = state.ballots[ballot_id]
+        question = state.questions[q_id]
+        subject = question.subject
+        if question.kind in ("refutation", "tiebreak") \
+                and subject in state.ces:
+            ce_id: str | None = subject
+            node_id: str = state.ces[subject].node_id
+        else:
+            ce_id = None
+            node_id = state.active_node_id or ""
+        counted = V.counted_ballot(state, q_id, ballot.handle_id)
+        counted_now = counted is not None and counted.ballot_id == ballot_id
+        # Fused from panel a: `replaced` names the ballot that lost its
+        # place — only when the new ballot actually counts. A shadowed
+        # ambient that loses to an explicit replaces nothing (None).
+        if not counted_now:
+            replaced = None
+        seq = next((e["seq"] for e in reversed(machine.events)
+                    if e["type"] in VOTE_EVENT_TYPES
+                    and e["payload"].get("ballot_id") == ballot_id),
+                   ballot.seq)
+        return VoteResult(
+            board_id=state.board_id,
+            node_id=node_id,
+            ce_id=ce_id,
+            q_id=q_id,
+            ballot_id=ballot_id,
+            handle_id=ballot.handle_id,
+            display=state.handles[ballot.handle_id].display,
+            channel=ballot.channel,
+            side=ballot.side,
+            reason=ballot.reason,
+            counted=bool(counted_now),
+            replaced_ballot_id=replaced,
+            seq=seq,
+            refuted=(bool(machine.is_refuted(node_id))
+                     if node_id and node_id in state.nodes else False),
+        )
 
     # -- internals ---------------------------------------------------------------
 
