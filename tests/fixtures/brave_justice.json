@@ -1,0 +1,21 @@
+{
+  "web": {
+    "results": [
+      {
+        "title": "Thrasymachus on justice — a counterexample primer",
+        "url": "https://example.org/justice/thrasy-primer",
+        "description": "A city run entirely for the stronger party looks like justice-as-advantage in action."
+      },
+      {
+        "title": "Cephalus's debts: the returning deposit case",
+        "url": "https://example.org/justice/cephalus-deposit",
+        "description": "Returning weapons to a friend who has gone mad fits the debt-paying definition and fails justice."
+      },
+      {
+        "title": "Robin Hood accounting as a 3b counterexample",
+        "url": "https://example.org/justice/robin-hood-3b",
+        "description": "Redistributive theft fits no canonical gloss yet reads as justice to many."
+      }
+    ]
+  }
+}

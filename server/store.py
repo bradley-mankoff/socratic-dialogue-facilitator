@@ -34,6 +34,7 @@ from dictionary.chain import DictionaryChain
 from dictionary.normalize import normalize_x
 from server.errors import DuplicateLabel, UnknownBoard
 from server.model import (
+    ALLOWED_EVENT_TYPES,
     OPS_EVENT_TYPES,
     BoardRecord,
     make_board_id,
@@ -307,21 +308,26 @@ class CanonicalStore:
 
 
 class MetaLog(JsonlStore):
-    """Append-only sidecar log of board *operations* (provenance + tray).
+    """Append-only sidecar log of board *operations* (provenance + tray) and
+    on-demand search/SEP events (SDF-16).
 
     Same durability as the verdict journal (fsync per append, torn-tail
     repair, ``read_all``) under a different filename, and its own per-board
     ``seq``. The machine never reads it; it never writes ``journal.jsonl``.
+    Accepts :data:`ALLOWED_EVENT_TYPES` — the SDF-5 claim events plus the
+    SDF-16 ``search_recorded`` / ``sep_admitted`` pair — and rejects
+    everything else (journal vocabulary included: ``ballot_cast`` is the
+    machine's, never this log's).
     """
 
     FILENAME = "meta.jsonl"
 
     def append_event(self, board_id: str, etype: str, payload: dict, *,
                      ts: str | None = None) -> dict:
-        """Append one slice event; returns the stored envelope."""
-        if etype not in OPS_EVENT_TYPES:
+        """Append one allowed event; returns the stored envelope."""
+        if etype not in ALLOWED_EVENT_TYPES:
             raise ValueError(
-                f"meta log holds only {OPS_EVENT_TYPES}, not {etype!r}")
+                f"meta log holds only {ALLOWED_EVENT_TYPES}, not {etype!r}")
         events = self.read_all(board_id)
         event = {
             "seq": len(events) + 1,
@@ -336,9 +342,9 @@ class MetaLog(JsonlStore):
     def read_events(self, board_id: str,
                     etype: str | None = None) -> list[dict]:
         """All sidecar events for a board, optionally filtered by type."""
-        if etype is not None and etype not in OPS_EVENT_TYPES:
+        if etype is not None and etype not in ALLOWED_EVENT_TYPES:
             raise ValueError(
-                f"meta log holds only {OPS_EVENT_TYPES}, not {etype!r}")
+                f"meta log holds only {ALLOWED_EVENT_TYPES}, not {etype!r}")
         events = self.read_all(board_id)
         if etype is None:
             return events
