@@ -28,6 +28,16 @@ from dictionary.normalize import normalize_x
 CLAIM_RECORDED = "claim_recorded"
 CLAIM_REVISED = "claim_revised"
 OPS_EVENT_TYPES: tuple[str, ...] = (CLAIM_RECORDED, CLAIM_REVISED)
+
+# SDF-16 on-demand sidecar events. The OPS tuple value above is frozen
+# (pinned by ``test_meta_log_is_separate_from_journal``); on-demand events
+# extend what ``MetaLog`` accepts without touching what OPS means.
+SEARCH_RECORDED = "search_recorded"
+SEP_ADMITTED = "sep_admitted"
+ON_DEMAND_EVENT_TYPES: tuple[str, ...] = (SEARCH_RECORDED, SEP_ADMITTED)
+ALLOWED_EVENT_TYPES: tuple[str, ...] = (OPS_EVENT_TYPES
+                                        + ON_DEMAND_EVENT_TYPES)
+
 TRAY_NAME = "carried_unvoted"
 SOURCE_TAG = "dictionary-chain"
 
@@ -414,13 +424,26 @@ def build_claim_revised(payload: dict) -> dict:
     return {"type": CLAIM_REVISED, "payload": dict(payload)}
 
 
+def build_search_recorded(payload: dict) -> dict:
+    """Event body for one deliberate web trigger (SDF-16)."""
+    return {"type": SEARCH_RECORDED, "payload": dict(payload)}
+
+
+def build_sep_admitted(payload: dict) -> dict:
+    """Event body for one SEP admission (link-out or pasted excerpt)."""
+    return {"type": SEP_ADMITTED, "payload": dict(payload)}
+
+
 __all__ = [
     "CLAIM_RECORDED", "CLAIM_REVISED", "OPS_EVENT_TYPES", "TRAY_NAME",
     "SOURCE_TAG", "CLAIM_KINDS", "VOTE_EVENT_TYPES", "MODES", "MEDIA",
+    "SEARCH_RECORDED", "SEP_ADMITTED", "ON_DEMAND_EVENT_TYPES",
+    "ALLOWED_EVENT_TYPES",
     "Mode", "Medium",
     "now_iso", "slug", "make_board_id", "next_label",
     "BoardRecord", "ClaimProvenance", "ClaimResult", "OpenResult",
     "AllegationResult", "VoteResult", "TiebreakResult",
     "canonical_provenance", "original_provenance",
     "build_claim_recorded", "build_claim_revised",
+    "build_search_recorded", "build_sep_admitted",
 ]

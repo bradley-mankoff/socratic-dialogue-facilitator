@@ -22,6 +22,11 @@ Division of authority (downstream SDF-7/10/14/18 depend on this):
   on unknown event types, so a foreign line would break replay forever.
 * **Canonicals** belong to the SDF-3 chain, cached per normalized X and
   shared by every board on that X (issue 02: "never re-pulled mid-dialogue").
+* **On-demand search + SEP** (SDF-16) are *explicit-trigger only*: a web
+  provider is a constructor argument (never built here — no default provider,
+  no key handling in this file), a trigger costs exactly one backend call,
+  SEP admissions perform zero I/O, and both land in the meta sidecar —
+  never in the journal, never in the canonical cache, never as nodes.
 
 Activation is not implemented here on purpose: ``register_node`` already
 makes the new node the single active one and freezes the superseded node's
@@ -62,6 +67,8 @@ from server.errors import (
 from server.model import (
     CLAIM_RECORDED,
     CLAIM_REVISED,
+    SEARCH_RECORDED,
+    SEP_ADMITTED,
     TRAY_NAME,
     VOTE_EVENT_TYPES,
     AllegationResult,
@@ -73,6 +80,13 @@ from server.model import (
     canonical_provenance,
     now_iso,
     original_provenance,
+)
+from search.backend import SearchBackend
+from search.errors import BadSepSource, NoSearchProvider
+from search.sep import make_sep_link, make_sep_paste, sep_entry_url
+from search.service import (
+    render_on_demand,
+    search_counterexamples as run_counterexample_search,
 )
 from server.store import (
     DEFAULT_ROOT,
@@ -99,10 +113,17 @@ class BoardService:
 
     def __init__(self, root: Path | str = DEFAULT_ROOT, *,
                  chain: DictionaryChain | None = None,
-                 clock: Callable[[], str] | None = None) -> None:
+                 clock: Callable[[], str] | None = None,
+                 search_provider: SearchBackend | None = None) -> None:
         self.root = Path(root)
         self.chain = chain
         self._clock = clock or now_iso
+        # SDF-16: stored verbatim, never constructed here. ``None`` (the
+        # default) means no web capability exists on this service — the
+        # trigger then refuses with NoSearchProvider before any I/O. There
+        # is deliberately no env/config fallback: nothing automatic can
+        # arm the web path.
+        self.search_provider = search_provider
         self.journals = JsonlStore(self.root)
         self.registry = BoardRegistry(registry_path(self.root))
         self.canonical_store = CanonicalStore(self.root,
@@ -118,9 +139,11 @@ class BoardService:
     @classmethod
     def open(cls, home: Path | str = Path("store"),
              chain: DictionaryChain | None = None,
-             clock: Callable[[], str] | None = None) -> "BoardService":
+             clock: Callable[[], str] | None = None,
+             search_provider: SearchBackend | None = None) -> "BoardService":
         """Re-open the data home; every board and snapshot comes from disk."""
-        return cls(home, chain=chain, clock=clock)
+        return cls(home, chain=chain, clock=clock,
+                   search_provider=search_provider)
 
     # -- canonical chain (lazy: never built at import/construct) -----------
 
@@ -339,16 +362,149 @@ class BoardService:
     def provenance(self, board_id: str, node_id: str) -> dict | None:
         return self.provenance_map(board_id).get(node_id)
 
+    # -- on-demand search + SEP admission (SDF-16) ---------------------------
+    # Explicit triggers only. Nothing in open_board, claim, revise, vote,
+    # tally, view or log paths calls these methods or anything they call.
+    # All three validate before the first write, touch the machine never,
+    # and write only to the meta sidecar — so they also work on closed
+    # boards (the journal stays terminal).
+
+    def search_counterexamples(self, board_id: str, *, triggered_by: str | None = None,
+                               requested_by: str | None = None,
+                               query: str | None = None,
+                               count: int = 5) -> dict:
+        """Deliberate web counterexample search for this board's X.
+
+        Costs exactly one backend call per trigger (never cached into
+        canonicals, never pre-fired); the labeled result is appended to
+        the meta sidecar as ``search_recorded`` and returned as a plain
+        dict. ``triggered_by`` (alias ``requested_by``, fused from panel a)
+        is stored verbatim as a display string — never enrolled as a
+        handle (enrollment would write journal events, and this is not a
+        room move). Both payload keys are always written so either
+        spelling reads back identically.
+        """
+        record = self.board(board_id)              # UnknownBoard, zero writes
+        if self.search_provider is None:
+            raise NoSearchProvider(
+                f"no search provider configured for board {board_id}")
+        who = triggered_by if triggered_by is not None else requested_by
+        if who is None:
+            raise ValueError("triggered_by (or requested_by) is required")
+        _display_string(who, "triggered_by")   # validate, verbatim
+        result = run_counterexample_search(
+            record.x, provider=self.search_provider, query=query,
+            limit=count)
+        prior = self.meta.read_events(board_id, SEARCH_RECORDED)
+        payload = {
+            **result.to_dict(),
+            "requested_by": who,
+            "triggered_by": who,
+            "search_id": f"srch{len(prior) + 1}",
+        }
+        self.meta.append_event(board_id, SEARCH_RECORDED, payload,
+                               ts=self._clock())
+        return payload
+
+    def attach_sep(self, board_id: str, *, triggered_by: str | None = None,
+                   requested_by: str | None = None,
+                   url: str | None = None, excerpt: str | None = None,
+                   speaker: str | None = None,
+                   citation: str = "") -> dict:
+        """Admit one SEP voice: a link-out URL or a pasted excerpt.
+
+        Exactly one of ``url`` / ``excerpt`` (both or neither refuse with
+        :class:`BadSepSource` and zero writes). A bare slug (no ``://``,
+        no whitespace) expands to the SEP entry URL; a full URL must be
+        https on exactly the SEP entry host (the one address
+        :mod:`search.sep` admits). The excerpt is stored
+        verbatim, capped at 2000 chars. **Zero I/O**: no fetch, no crawl,
+        no validation request — the philosopher source is never touched
+        by the server. ``speaker`` / ``triggered_by`` stay display
+        strings, never enrolled handles.
+        """
+        record = self.board(board_id)
+        who = triggered_by if triggered_by is not None else requested_by
+        if who is None:
+            raise ValueError("triggered_by (or requested_by) is required")
+        _display_string(who, "triggered_by")   # validate, verbatim
+        given = [name for name, value in (("url", url), ("excerpt", excerpt))
+                 if value is not None]
+        if len(given) != 1:
+            raise BadSepSource(
+                "exactly one of url= (link-out) or excerpt= (paste) "
+                "is required")
+        retrieved_at = self._clock()
+        if given[0] == "url":
+            entry = make_sep_link(self._expand_sep_url(url), x=record.x,
+                                  citation=citation,
+                                  retrieved_at=retrieved_at)
+        else:
+            entry = make_sep_paste(excerpt, x=record.x, citation=citation,
+                                   speaker=speaker, url=None,
+                                   retrieved_at=retrieved_at)
+        prior = self.meta.read_events(board_id, SEP_ADMITTED)
+        payload = {
+            **entry.to_dict(),
+            "triggered_by": who,
+            "requested_by": who,
+            "sep_id": f"sep{len(prior) + 1}",
+        }
+        self.meta.append_event(board_id, SEP_ADMITTED, payload,
+                               ts=self._clock())
+        return payload
+
+    @staticmethod
+    def _expand_sep_url(url: str) -> str:
+        """Full SEP URL → verbatim; bare slug → entry URL; else refuse.
+
+        A scheme-less dotted/host-shaped string is assumed https (then
+        the strict host check in ``search.sep`` still applies); whitespace
+        or blank is a paste confused with a link, and refuses.
+        """
+        text = str(url).strip()
+        if not text:
+            raise BadSepSource("a SEP link needs a non-blank URL")
+        if "://" in text:
+            return text
+        if any(ch.isspace() for ch in text):
+            raise BadSepSource(
+                "that looks like prose, not a URL — pass excerpt= instead")
+        if "/" in text or "." in text:
+            return f"https://{text}"
+        return sep_entry_url(text)
+
+    def on_demand(self, board_id: str) -> dict:
+        """Read path: ``{"searches": [...], "sep": [...]}`` in seq order.
+
+        Pure read over the meta sidecar — no provider call, no canonical
+        cache touch, no journal read.
+        """
+        self.board(board_id)
+        return render_on_demand(
+            self.meta.read_events(board_id, SEARCH_RECORDED),
+            self.meta.read_events(board_id, SEP_ADMITTED),
+        )
+
+    def counterexamples(self, board_id: str) -> dict:
+        """Alias of :meth:`on_demand` for SDF-10 renderers."""
+        return self.on_demand(board_id)
+
     # -- views -----------------------------------------------------------------
 
     def view(self, board_id: str) -> dict:
-        """JSON-able whole-board view (SDF-10's payload)."""
+        """JSON-able whole-board view (SDF-10's payload).
+
+        The ``on_demand``/``counterexamples`` section is folded from this
+        board's meta events (SDF-16): one voice material, never canonicals.
+        """
         record = self.board(board_id)
         machine = self.machine(board_id)
         snapshot = self.canonical_store.cached(record.x_norm)
         return board_view(
             record, machine.state, self.provenance_map(board_id), snapshot,
-            shared_cache=len(self.registry.boards_for(record.x_norm)) > 1)
+            shared_cache=len(self.registry.boards_for(record.x_norm)) > 1,
+            on_demand_events=self.meta.read_events(board_id))
 
     def boards_list(self, x: str | None = None) -> list[dict]:
         return boards_view(self.list_boards(x))
@@ -1224,3 +1380,10 @@ class BoardService:
 
 
 __all__ = ["BoardService"]
+
+
+def _display_string(value, name: str) -> str:
+    """Non-blank display string (verbatim; never enrolled as a handle)."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a non-blank display string")
+    return value

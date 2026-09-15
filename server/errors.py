@@ -90,6 +90,17 @@ class NotAGovernanceQuestion(BoardOpError):
     """A governance-only call was aimed at a refutation question."""
 
 
+# SDF-16 search errors — re-exported, never redefined (same rule as the
+# machine errors above): ``search`` owns its vocabulary, ``server`` merely
+# surfaces it so downstream code can catch everything from one module.
+from search.errors import (  # noqa: E402,F401  (re-export is the point)
+    BadSepSource,
+    MissingSearchKey,
+    NoSearchProvider,
+    SearchError,
+)
+
+
 __all__ = [
     "BoardOpError",
     "UnknownBoard",
@@ -103,6 +114,11 @@ __all__ = [
     "GovernanceAlreadyOpen",
     "GovernanceNoOp",
     "NotAGovernanceQuestion",
+    # re-exported from the SDF-16 search package
+    "SearchError",
+    "MissingSearchKey",
+    "NoSearchProvider",
+    "BadSepSource",
     # re-exported from the SDF-2 machine
     "BoardClosed",
     "BoardAlreadyExists",

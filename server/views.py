@@ -18,6 +18,12 @@ from typing import Any
 import board.verdicts as V
 from board import roles as R
 from board.model import BoardState
+from search.model import (
+    COUNTEREXAMPLES_SECTION_KIND,
+    ON_DEMAND_SECTION_LABEL,
+)
+from search.service import render_on_demand
+from server.model import SEARCH_RECORDED, SEP_ADMITTED
 
 NOT_PULLED = "not_pulled"
 
@@ -101,9 +107,31 @@ def canonicals_view(snapshot: dict | None) -> dict[str, Any]:
     }
 
 
+def on_demand_view(events: list[dict]) -> dict[str, Any]:
+    """The on-demand counterexample section (SDF-16): web + SEP voices.
+
+    Structurally separate from :func:`canonicals_view` — these are one
+    voice among many, never canonical definitions — folded from
+    already-persisted ``search_recorded`` / ``sep_admitted`` meta events
+    (file order == seq order). Pure read of envelopes; JSON-able."""
+    searches = [e for e in events if e.get("type") == SEARCH_RECORDED]
+    seps = [e for e in events if e.get("type") == SEP_ADMITTED]
+    section: dict[str, Any] = {
+        "kind": COUNTEREXAMPLES_SECTION_KIND,
+        "label": ON_DEMAND_SECTION_LABEL,
+    }
+    section.update(render_on_demand(searches, seps))
+    return section
+
+
+# Alias so both names work for SDF-10 renderers (one section, two spellings).
+counterexamples_view = on_demand_view
+
+
 def board_view(record, state: BoardState, provenance_map: dict[str, dict],
                snapshot: dict | None, *,
-               shared_cache: bool = False) -> dict[str, Any]:
+               shared_cache: bool = False,
+               on_demand_events: list[dict] | None = None) -> dict[str, Any]:
     """Whole-board view: header, handles, lineage (v1→vN), questions, defs.
 
     ``mode``/``medium``/``status`` are read from the live machine state, not
@@ -132,6 +160,11 @@ def board_view(record, state: BoardState, provenance_map: dict[str, dict],
         "questions": [question_view(state, q) for q in questions],
         "roles": roles_view(state),
         "canonicals": canonicals_view(snapshot),
+        # SDF-16: one on-demand section under two alias keys — never inside
+        # "canonicals"; searches[] are web voices, sep[] are philosopher
+        # voices, both canonical False.
+        "on_demand": on_demand_view(on_demand_events or []),
+        "counterexamples": on_demand_view(on_demand_events or []),
         "cache": {"shared": bool(shared_cache), "source": "registry"},
     }
 
@@ -295,4 +328,5 @@ __all__ = [
     "NOT_PULLED", "node_view", "question_view", "canonicals_view",
     "board_view", "boards_view", "roles_view",
     "vote_rows", "ce_rows", "scoreboard_view",
+    "on_demand_view", "counterexamples_view",
 ]
