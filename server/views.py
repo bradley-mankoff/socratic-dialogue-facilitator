@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 import board.verdicts as V
+from board import roles as R
 from board.model import BoardState
 
 NOT_PULLED = "not_pulled"
@@ -129,9 +130,20 @@ def board_view(record, state: BoardState, provenance_map: dict[str, dict],
         "nodes": [node_view(state, n, provenance_map.get(n.node_id))
                   for n in nodes],
         "questions": [question_view(state, q) for q in questions],
+        "roles": roles_view(state),
         "canonicals": canonicals_view(snapshot),
         "cache": {"shared": bool(shared_cache), "source": "registry"},
     }
+
+
+def roles_view(state: BoardState) -> dict[str, Any]:
+    """Fused from panel c: seats snapshot for the board header.
+
+    Pure read over :mod:`board.roles` (the same predicates the machine
+    enforces), so the UI seat display cannot disagree with the core:
+    ``socrates`` is stored truth, ``defense`` derives from the active
+    node's defender, ``pending_cede`` is the in-flight offer if any."""
+    return dict(R.seats_view(state))
 
 
 def boards_view(records: list) -> list[dict[str, Any]]:
@@ -281,6 +293,6 @@ def scoreboard_view(machine, node_id: str) -> dict[str, Any]:
 
 __all__ = [
     "NOT_PULLED", "node_view", "question_view", "canonicals_view",
-    "board_view", "boards_view",
+    "board_view", "boards_view", "roles_view",
     "vote_rows", "ce_rows", "scoreboard_view",
 ]

@@ -34,11 +34,17 @@ from server.errors import (
     DuplicateTiebreak,
     EmptyCanonicals,
     FacilitatorCannotVote,
+    FacilitatorHoldsNoSeat,
     NoActiveClaim,
     NoCanonicals,
+    NoPendingCede,
     NotActiveNode,
+    NotCedeTarget,
+    NotDefender,
     QNotOpen,
+    SeatNeverVacant,
     SideMismatch,
+    StaleCede,
     TiebreakNotPassed,
     UnknownBoard,
     UnknownCounterexample,
@@ -82,6 +88,7 @@ from server.views import (
     ce_rows,
     node_view,
     question_view,
+    roles_view,
     scoreboard_view,
     vote_rows,
 )
@@ -102,6 +109,7 @@ __all__ = [
     # views
     "board_view", "boards_view", "canonicals_view", "node_view",
     "question_view", "vote_rows", "ce_rows", "scoreboard_view",
+    "roles_view",
     # errors (slice + re-exported machine errors)
     "BoardOpError", "UnknownBoard", "NoCanonicals", "EmptyCanonicals",
     "UnknownSense", "NoActiveClaim", "ClaimAlreadyActive", "BlankClaim",
@@ -109,4 +117,6 @@ __all__ = [
     "UnknownHandle", "UnknownNode", "UnknownQuestion",
     "UnknownCounterexample", "DuplicateTiebreak", "TiebreakNotPassed",
     "SideMismatch", "QNotOpen", "FacilitatorCannotVote", "NotActiveNode",
+    "FacilitatorHoldsNoSeat", "SeatNeverVacant", "NotDefender",
+    "NoPendingCede", "NotCedeTarget", "StaleCede",
 ]

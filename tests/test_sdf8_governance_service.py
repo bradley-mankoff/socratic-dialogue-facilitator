@@ -134,7 +134,7 @@ def test_rejected_mode_switch_logs_against_and_changes_nothing(tmp_path):
     assert row["tally"] == {"for": 0, "against": 3}
 
 
-def test_socrates_swap_records_mandate_without_touching_seat(tmp_path):
+def test_socrates_swap_records_mandate_and_applies_seat(tmp_path):
     env = governance_board(tmp_path)
     svc, bid, m = env.service, env.board_id, env.machine
     m.set_socrates(env.h["Cephalus"])
@@ -142,8 +142,8 @@ def test_socrates_swap_records_mandate_without_touching_seat(tmp_path):
                                   opened_by=env.h["Cephalus"])
     _vote(svc, env, q, "for")
     assert m.q_status(q) == ("settled", "for")
-    # SDF-9 owns seats: this slice records the mandate, never moves it
-    assert m.state.socrates_handle_id == env.h["Cephalus"]
+    # SDF-9 supersedes the SDF-8 seat-untouched pin: settled swaps apply now.
+    assert m.state.socrates_handle_id == env.h["Polemarchus"]
     mandate = svc.mandate_for(bid, "socrates_swap")
     assert mandate["target"] == env.h["Polemarchus"]
     assert mandate["q_id"] == q
@@ -165,7 +165,7 @@ def test_later_rejected_swap_does_not_revoke_live_mandate(tmp_path):
     assert mandate["q_id"] == first
 
 
-def test_active_claim_switch_records_without_reactivating(tmp_path):
+def test_active_claim_switch_records_and_reactivates(tmp_path):
     env = governance_board(tmp_path)
     svc, bid, m = env.service, env.board_id, env.machine
     svc.revise(bid, "Justice is the interest of the stronger (v2).",
@@ -176,13 +176,13 @@ def test_active_claim_switch_records_without_reactivating(tmp_path):
                                         opened_by=env.h["Cephalus"])
     _vote(svc, env, q, "for")
     assert m.q_status(q) == ("settled", "for")
-    assert m.state.active_node_id == "n2"          # never re-activated here
+    assert m.state.active_node_id == "n1"          # applied on settle (SDF-9)
     mandate = svc.mandate_for(bid, "active_claim_switch")
     assert mandate["target"] == "n1"
     assert mandate["q_id"] == q
 
     with pytest.raises(GovernanceNoOp):
-        svc.propose_active_claim_switch(bid, "n2",
+        svc.propose_active_claim_switch(bid, "n1",
                                         opened_by=env.h["Cephalus"])
     with pytest.raises(UnknownNode):
         svc.propose_active_claim_switch(bid, "n9",
