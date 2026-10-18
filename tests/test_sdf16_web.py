@@ -11,11 +11,9 @@ import pytest
 from dictionary.transport import TransportError
 from search.backend import (
     BRAVE_SEARCH_API,
-    NullSearchBackend,
     BraveSearchBackend,
     brave_headers,
     brave_search_url,
-    build_default_search_backend,
     clamp_limit,
     parse_brave,
 )
@@ -56,13 +54,6 @@ def test_construction_makes_zero_calls():
     stub = StubSearchTransport([brave_response()])
     BraveSearchBackend(BRAVE_KEY, stub, clock=lambda: TS)
     assert stub.calls == []
-
-
-def test_build_default_backend_without_key_is_null():
-    backend = build_default_search_backend()
-    assert isinstance(backend, NullSearchBackend)
-    keyed = build_default_search_backend(BRAVE_KEY)
-    assert isinstance(keyed, BraveSearchBackend)
 
 
 # -- F2/F3 one explicit call, token in header, never in URL ----------------
@@ -149,15 +140,6 @@ def test_results_are_labeled_one_voice_web_search():
     assert "dictionary-chain" not in json.dumps(payload)
     assert "senses" not in payload and "cites" not in payload
     assert "empty_reason" not in payload
-
-
-def test_null_backend_reports_unavailable_without_asking_for_network():
-    backend = NullSearchBackend(clock=lambda: TS)
-    result = backend.search("justice")
-    assert result.state == "unavailable"
-    assert result.detail == "no search provider configured"
-    assert result.hits == [] and result.engine is None
-    assert result.kind == WEB_SEARCH_KIND and result.canonical is False
 
 
 # -- F6 failures are data, never raised -------------------------------------
@@ -259,7 +241,6 @@ def test_search_backend_protocol_holds_for_both_backends():
     from search.backend import SearchBackend
 
     assert isinstance(make_provider(clock=lambda: TS), SearchBackend)
-    assert isinstance(NullSearchBackend(), SearchBackend)
 
 
 def test_live_default_transport_is_blocked_by_no_live_network():

@@ -74,6 +74,20 @@ def canonical_path(x_norm: str, root: Path | str = DEFAULT_ROOT) -> Path:
     return canonicals_dir(root) / f"{slug(x_norm)}.json"
 
 
+def _atomic_write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w") as fh:
+        import json as _json
+        import os as _os
+        _json.dump(payload, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+        fh.flush()
+        _os.fsync(fh.fileno())
+    import os as _os2
+    _os2.replace(tmp, path)
+
+
 def creation_key(record: BoardRecord) -> tuple:
     """Stable "created order" sort key.
 
@@ -180,14 +194,7 @@ class BoardRegistry:
             "counter": self.counter,
             "boards": {bid: r.to_dict() for bid, r in self.boards.items()},
         }
-        self.root.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".json.tmp")
-        with open(tmp, "w") as fh:
-            json.dump(payload, fh, indent=2, sort_keys=True)
-            fh.write("\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, self.path)
+        _atomic_write_json(self.path, payload)
 
     def load(self) -> None:
         """Read the registry; a missing or corrupt file means an empty map
@@ -296,38 +303,21 @@ class CanonicalStore:
 
     def _persist(self, x_norm: str, snapshot: dict) -> None:
         self._mem[x_norm] = snapshot
-        path = self._path_for(x_norm)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        with open(tmp, "w") as fh:
-            json.dump(snapshot, fh, indent=2, sort_keys=True)
-            fh.write("\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
+        _atomic_write_json(self._path_for(x_norm), snapshot)
 
 
-class MetaLog(JsonlStore):
-    """Append-only sidecar log of board *operations* (provenance + tray) and
-    on-demand search/SEP events (SDF-16).
+class _EventLog(JsonlStore):
+    """Shared append-only sidecar log base."""
 
-    Same durability as the verdict journal (fsync per append, torn-tail
-    repair, ``read_all``) under a different filename, and its own per-board
-    ``seq``. The machine never reads it; it never writes ``journal.jsonl``.
-    Accepts :data:`ALLOWED_EVENT_TYPES` — the SDF-5 claim events plus the
-    SDF-16 ``search_recorded`` / ``sep_admitted`` pair — and rejects
-    everything else (journal vocabulary included: ``ballot_cast`` is the
-    machine's, never this log's).
-    """
-
-    FILENAME = "meta.jsonl"
+    ALLOWED: tuple[str, ...] = ()
+    LOG_NAME = "event log"
 
     def append_event(self, board_id: str, etype: str, payload: dict, *,
                      ts: str | None = None) -> dict:
         """Append one allowed event; returns the stored envelope."""
-        if etype not in ALLOWED_EVENT_TYPES:
+        if etype not in self.ALLOWED:
             raise ValueError(
-                f"meta log holds only {ALLOWED_EVENT_TYPES}, not {etype!r}")
+                f"{self.LOG_NAME} holds only {self.ALLOWED}, not {etype!r}")
         events = self.read_all(board_id)
         event = {
             "seq": len(events) + 1,
@@ -342,16 +332,34 @@ class MetaLog(JsonlStore):
     def read_events(self, board_id: str,
                     etype: str | None = None) -> list[dict]:
         """All sidecar events for a board, optionally filtered by type."""
-        if etype is not None and etype not in ALLOWED_EVENT_TYPES:
+        if etype is not None and etype not in self.ALLOWED:
             raise ValueError(
-                f"meta log holds only {ALLOWED_EVENT_TYPES}, not {etype!r}")
+                f"{self.LOG_NAME} holds only {self.ALLOWED}, not {etype!r}")
         events = self.read_all(board_id)
         if etype is None:
             return events
         return [e for e in events if e.get("type") == etype]
 
 
-class SystemLog(JsonlStore):
+class MetaLog(_EventLog):
+    """Append-only sidecar log of board *operations* (provenance + tray) and
+    on-demand search/SEP events (SDF-16).
+
+    Same durability as the verdict journal (fsync per append, torn-tail
+    repair, ``read_all``) under a different filename, and its own per-board
+    ``seq``. The machine never reads it; it never writes ``journal.jsonl``.
+    Accepts :data:`ALLOWED_EVENT_TYPES` — the SDF-5 claim events plus the
+    SDF-16 ``search_recorded`` / ``sep_admitted`` pair — and rejects
+    everything else (journal vocabulary included: ``ballot_cast`` is the
+    machine's, never this log's).
+    """
+
+    FILENAME = "meta.jsonl"
+    ALLOWED = ALLOWED_EVENT_TYPES
+    LOG_NAME = "meta log"
+
+
+class SystemLog(_EventLog):
     """Append-only facilitator-blind system log of governance events (SDF-8).
 
     A fourth durable home beside ``journal.jsonl`` and ``meta.jsonl``: same
@@ -365,34 +373,8 @@ class SystemLog(JsonlStore):
     """
 
     FILENAME = "system.jsonl"
-
-    def append_event(self, board_id: str, etype: str, payload: dict, *,
-                     ts: str | None = None) -> dict:
-        """Append one governance event; returns the stored envelope."""
-        if etype not in SYSTEM_EVENT_TYPES:
-            raise ValueError(
-                f"system log holds only {SYSTEM_EVENT_TYPES}, not {etype!r}")
-        events = self.read_all(board_id)
-        event = {
-            "seq": len(events) + 1,
-            "type": etype,
-            "board_id": board_id,
-            "ts": ts or now_iso(),
-            "payload": dict(payload),
-        }
-        self.append(board_id, event)
-        return event
-
-    def read_events(self, board_id: str,
-                    etype: str | None = None) -> list[dict]:
-        """All system events for a board, optionally filtered by type."""
-        if etype is not None and etype not in SYSTEM_EVENT_TYPES:
-            raise ValueError(
-                f"system log holds only {SYSTEM_EVENT_TYPES}, not {etype!r}")
-        events = self.read_all(board_id)
-        if etype is None:
-            return events
-        return [e for e in events if e.get("type") == etype]
+    ALLOWED = SYSTEM_EVENT_TYPES
+    LOG_NAME = "system log"
 
 
 __all__ = [

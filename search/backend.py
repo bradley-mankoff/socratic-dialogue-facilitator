@@ -23,11 +23,10 @@ at all, by construction.
 from __future__ import annotations
 
 import json
-import socket
-from typing import Any, Protocol, runtime_checkable
-from urllib import error, parse, request
+from typing import Protocol, runtime_checkable
+from urllib import parse
 
-from dictionary.transport import HttpResponse, TransportError
+from dictionary.transport import HttpResponse, TransportError, UrllibTransport
 from search.errors import MissingSearchKey
 from search.model import (
     WEB_RESULT_LABEL,
@@ -41,8 +40,6 @@ from search.model import (
 
 BRAVE_SEARCH_API = "https://api.search.brave.com/res/v1/web/search"
 BRAVE_ENGINE = "brave"
-USER_AGENT = "socratic-facilitator/0.1 (local self-hosted; contact recorded at deploy)"
-DEFAULT_TIMEOUT = 5.0
 LIMIT_MIN = 1
 LIMIT_MAX = 20
 
@@ -73,66 +70,12 @@ class SearchTransport(Protocol):
     def get(self, url: str, *, headers: dict) -> HttpResponse: ...
 
 
-class HeaderUrllibTransport:
-    """Default search transport: stdlib urllib, one attempt, no retry.
-
-    Mirrors dictionary semantics: HTTP status is *data* on the returned
-    :class:`HttpResponse`; only connection-level failures (DNS, timeout,
-    refused) raise ``TransportError``.
-    """
-
-    def __init__(self, timeout: float = DEFAULT_TIMEOUT,
-                 user_agent: str = USER_AGENT) -> None:
-        self.timeout = timeout
-        self.user_agent = user_agent
-
-    def get(self, url: str, *, headers: dict | None = None) -> HttpResponse:
-        merged = {"User-Agent": self.user_agent, **dict(headers or {})}
-        req = request.Request(url, headers=merged)
-        try:
-            with request.urlopen(req, timeout=self.timeout) as resp:
-                body = resp.read().decode("utf-8", errors="replace")
-                return HttpResponse(status=resp.status, body=body, url=url)
-        except error.HTTPError as exc:  # 4xx/5xx: status is data, not failure
-            try:
-                body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
-            except Exception:
-                body = ""
-            return HttpResponse(status=exc.code, body=body, url=url)
-        except (error.URLError, TimeoutError, socket.timeout, OSError) as exc:
-            raise TransportError(f"{type(exc).__name__}: {exc}") from exc
-
-
 @runtime_checkable
 class SearchBackend(Protocol):
     """What a search provider must offer (the only I/O-bearing method)."""
 
     def search(self, x: str, *, query: str | None = None,
                limit: int = 5) -> CounterexampleResult: ...
-
-
-class NullSearchBackend:
-    """No web provider configured: every trigger answers with data.
-
-    ``state="unavailable"`` with ``detail="no search provider configured"``
-    and zero hits, at **zero transport calls** — a trigger without a
-    provider must never invent network I/O to compensate.
-    """
-
-    def __init__(self, *, clock=None) -> None:
-        self.clock = clock or now_iso
-
-    def search(self, x: str, *, query: str | None = None,
-               limit: int = 5) -> CounterexampleResult:
-        return CounterexampleResult(
-            x=x,
-            query=query if query is not None else default_query(x),
-            state="unavailable",
-            hits=[],
-            detail="no search provider configured",
-            engine=None,
-            retrieved_at=self.clock(),
-        )
 
 
 class BraveSearchBackend:
@@ -151,7 +94,7 @@ class BraveSearchBackend:
                 "(constructor argument only — never env/config)")
         self.key = key
         self.transport = transport if transport is not None \
-            else HeaderUrllibTransport()
+            else UrllibTransport()
         self.engine = engine
         self.clock = clock or now_iso
 
@@ -220,25 +163,11 @@ def parse_brave(payload: dict, *, x: str, query: str, engine: str,
     )
 
 
-def build_default_search_backend(key: str | None = None,
-                                 transport: SearchTransport | None = None
-                                 ) -> SearchBackend:
-    """Keyed → Brave; no key → the explicit no-provider backend.
-
-    The key is a constructor argument by design: no env/config read hides
-    in the automatic path, so "no web call without an explicit trigger"
-    is provable by construction (F1/F6/F20).
-    """
-    if key:
-        return BraveSearchBackend(key, transport)
-    return NullSearchBackend()
-
-
 __all__ = [
-    "BRAVE_SEARCH_API", "BRAVE_ENGINE", "USER_AGENT", "DEFAULT_TIMEOUT",
+    "BRAVE_SEARCH_API", "BRAVE_ENGINE",
     "LIMIT_MIN", "LIMIT_MAX",
     "clamp_limit", "brave_search_url", "brave_headers",
-    "SearchTransport", "HeaderUrllibTransport",
-    "SearchBackend", "NullSearchBackend", "BraveSearchBackend",
-    "parse_brave", "build_default_search_backend",
+    "SearchTransport",
+    "SearchBackend", "BraveSearchBackend",
+    "parse_brave",
 ]

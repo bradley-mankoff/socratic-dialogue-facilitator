@@ -9,7 +9,8 @@ import json
 
 import pytest
 
-from server.errors import NoActiveClaim, UnknownNode
+from board.machine import UnknownNode
+from server.errors import NoActiveClaim
 from tests.sdf6_stubs import make_svc
 
 
@@ -120,19 +121,19 @@ def test_scoreboard_numbers_match_machine(tmp_path):
     sb = service.scoreboard(bid)
     state = machine.state
     assert sb["is_refuted"] == machine.is_refuted(env.node)
-    assert sb["node_status"] == machine.node_status(env.node)
+    assert sb["node_status"] == machine.state.nodes[env.node].status
     assert [row["ce_id"] for row in sb["ces"]] == [env.ce, ce2]
     for row, ce in zip(sb["ces"], (env.ce, ce2)):
         stands, rebutted = machine.standing_counts(ce)
         assert row["tally"] == {"stands": stands, "rebutted": rebutted}
         assert row["census_size"] == len(machine.census(row["q_id"]))
         assert row["is_standing"] == machine.is_standing(ce)
-        assert row["is_refuted"] == machine.ce_is_refuted(ce)
+        assert row["is_refuted"] == V.ce_is_refuted(state, ce)
         assert row["outcome"] == V.refutation_outcome(state, ce)
         assert row["q_status"] == state.questions[row["q_id"]].status
     # and the header is the machine's node-level verdict, not a re-derivation
     assert sb["is_refuted"] is False
-    assert machine.node_status(env.node) == "unrefuted"
+    assert machine.state.nodes[env.node].status == "unrefuted"
     assert sb["node_status"] == "unrefuted"
     del q2
 
@@ -151,7 +152,7 @@ def test_scoreboard_json_and_scoping(tmp_path):
     assert service.scoreboard(bid, env.node)["ces"][0]["ce_id"] == env.ce
     assert service.scoreboard(bid, env.node)["ces"][1]["ce_id"] == ce2
 
-    from server.errors import UnknownNode
+    from board.machine import UnknownNode
     with pytest.raises(UnknownNode):
         service.scoreboard(bid, "nX")
     # a claimless board cannot be scored

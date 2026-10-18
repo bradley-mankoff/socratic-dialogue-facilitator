@@ -58,7 +58,7 @@ def test_justice_board_end_to_end(tmp_path):
     machine.cast(q2, cephalus, "explicit", "stands")
     machine.cast(q2, polemarchus, "explicit", "rebutted")
     machine.cast(q2, thrasymachus, "explicit", "rebutted")
-    assert machine.node_status("n1") == "refuted"
+    assert machine.state.nodes["n1"].status == "refuted"
 
     # 4. Thrasymachus answers ce1 with a new claim: a NEW node (AC3)
     second = service.revise(bid, THRASYMACHUS,

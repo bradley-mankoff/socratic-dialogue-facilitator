@@ -19,6 +19,7 @@ from board.machine import (
     UnknownHandle,
     UnknownQuestion,
 )
+import board.verdicts as V
 from server.model import VOTE_EVENT_TYPES, VoteResult
 from tests.sdf6_stubs import make_svc
 
@@ -110,7 +111,7 @@ def test_majority_of_frozen_census_refutes(tmp_path):
     service.cast_vote(bid, env.q, "rebutted", by_display="Thrasymachus")
     assert 2 * 2 > len(machine.census(env.q)) == 3
     assert machine.is_refuted(env.ce) is True
-    assert machine.node_status(env.node) == "refuted"
+    assert machine.state.nodes[env.node].status == "refuted"
     assert service.scoreboard(bid)["is_refuted"] is True
 
     # a 4th human enrolled after open, casting nothing, never joins
@@ -128,7 +129,7 @@ def test_majority_of_frozen_census_refutes(tmp_path):
     # now 2 stands / 2 rebutted over census 4: 4 not > 4, un-refuted
     flip = service.cast_vote(bid, env.q, "rebutted", by_display="Cephalus")
     assert flip.refuted is False
-    assert machine.node_status(env.node) == "unrefuted"
+    assert machine.state.nodes[env.node].status == "unrefuted"
     # and 3–1 over census 4 refutes again (6 > 4)
     back = service.cast_vote(bid, env.q, "stands", by_display="Cephalus")
     assert back.refuted is True
@@ -191,10 +192,10 @@ def test_revote_latest_counts_and_can_unrefute_active_node(tmp_path):
     service.cast_vote(bid, env.q, "rebutted", by_display="Cephalus")
     service.cast_vote(bid, env.q, "rebutted", by_display="Polemarchus")
     assert machine.is_refuted(env.ce) is False
-    assert machine.node_status(env.node) == "unrefuted"
+    assert machine.state.nodes[env.node].status == "unrefuted"
     # every ballot still on record, one counted per handle
     assert len(machine.state.ballots) == 4
-    assert len(machine.counted_all(env.q)) == 2
+    assert len(V.counted(machine.state, env.q)) == 2
     assert machine.counted(env.q, env.h["Cephalus"]).side == "rebutted"
 
 
@@ -320,7 +321,7 @@ def test_vote_result_roundtrip_and_events_feed(tmp_path):
     # reopen: the feed is a pure journal read, identical after reload
     from server.service import BoardService
     from tests.sdf5_stubs import empty_chain
-    reopened = BoardService.open(tmp_path, chain=empty_chain())
+    reopened = BoardService(tmp_path, chain=empty_chain())
     assert reopened.vote_events(bid) == events
     assert reopened.vote_events(bid, since_seq=r2.seq) == [
         e for e in events if e["seq"] > r2.seq]

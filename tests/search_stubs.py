@@ -86,14 +86,24 @@ class CountingBackend:
     """Records explicit triggers; never performs I/O (counting stub)."""
 
     def __init__(self, *, clock=None) -> None:
-        from search.backend import NullSearchBackend
+        from search.model import CounterexampleResult, default_query
 
-        self._null = NullSearchBackend(clock=clock)
+        self._CounterexampleResult = CounterexampleResult
+        self._default_query = default_query
+        self._clock = clock or (lambda: "2026-09-13T00:00:00+00:00")
         self.searches: list[dict] = []
 
     def search(self, x, *, query=None, limit=5):
         self.searches.append({"x": x, "query": query, "limit": limit})
-        return self._null.search(x, query=query, limit=limit)
+        return self._CounterexampleResult(
+            x=x,
+            query=query if query is not None else self._default_query(x),
+            state="unavailable",
+            hits=[],
+            detail="no search provider configured",
+            engine=None,
+            retrieved_at=self._clock(),
+        )
 
 
 __all__ = [

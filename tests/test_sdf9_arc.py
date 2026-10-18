@@ -42,7 +42,7 @@ def test_justice_roles_end_to_end(sdf5_svc, sdf5_store):
     assert reload_state(sdf5_svc, env.board_id) == m.state
 
     # closed board: every SDF-9 mutation refuses
-    qc = m.propose_close(opened_by=h["Cephalus"])
+    qc = m.open_governance_q("close", opened_by=h["Cephalus"])
     for voter in VOTERS:
         m.cast(qc, h[voter], "explicit", "for")
     assert m.is_closed()

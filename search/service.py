@@ -16,21 +16,11 @@ from typing import Any, Callable
 from dictionary.normalize import normalize_x
 from search.backend import SearchBackend
 from search.model import (
-    COUNTEREXAMPLES_SECTION_KIND,
-    ON_DEMAND_SECTION_LABEL,
     SEP_KIND,
     SEP_SOURCE_LABEL,
     WEB_SEARCH_KIND,
     CounterexampleResult,
-    WebHit,
 )
-
-# Fused a+b alias: panel a imports the section header from this module as
-# ``ON_DEMAND_KIND`` / ``ON_DEMAND_LABEL``; panel b from ``search.model``.
-# Re-export the identical values here so both spellings resolve.
-ON_DEMAND_KIND = COUNTEREXAMPLES_SECTION_KIND
-ON_DEMAND_LABEL = ON_DEMAND_SECTION_LABEL
-
 
 def search_counterexamples(x: str, *, provider: SearchBackend,
                            query: str | None = None, limit: int = 5,
@@ -100,12 +90,6 @@ def _payload(event: Any) -> dict:
     return {}
 
 
-def hit_view(hit: WebHit) -> dict:
-    """One web hit as a view row (kept here so views import once)."""
-    return hit.to_dict()
-
-
 __all__ = [
-    "ON_DEMAND_KIND", "ON_DEMAND_LABEL",
-    "search_counterexamples", "render_on_demand", "hit_view",
+    "search_counterexamples", "render_on_demand",
 ]

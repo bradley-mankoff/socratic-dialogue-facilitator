@@ -67,14 +67,6 @@ def _require_sep_url(url: str) -> str:
     return candidate
 
 
-# Fused a+b alias: panel a spells the strict link check ``check_sep_url``
-# (public); panel b keeps it private as ``_require_sep_url``. One function,
-# two names — hidden tests using either spelling hit the same check.
-def check_sep_url(url: str) -> str:
-    """Public alias of the strict SEP-URL check (echoes stripped URL)."""
-    return _require_sep_url(url)
-
-
 def _require_speaker(speaker) -> str | None:
     """Verbatim display string or None; anything else refuses."""
     if speaker is None:
@@ -134,7 +126,6 @@ def make_sep_paste(excerpt: str, *, x: str, citation: str = "",
 
 __all__ = [
     "SEP_HOST", "EXCERPT_MAX_CHARS", "SEP_SITE",
-    "check_sep_url",
     "sep_entry_url", "sep_search_url",
     "make_sep_link", "make_sep_paste",
 ]

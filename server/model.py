@@ -18,12 +18,12 @@ provenance never rides inside it (see plan §10).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+import re
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from board.model import MEDIA, MODES, Medium, Mode  # noqa: F401 (re-export)
 from dictionary.normalize import normalize_x
+from search.model import now_iso
 
 CLAIM_RECORDED = "claim_recorded"
 CLAIM_REVISED = "claim_revised"
@@ -41,8 +41,6 @@ ALLOWED_EVENT_TYPES: tuple[str, ...] = (OPS_EVENT_TYPES
 TRAY_NAME = "carried_unvoted"
 SOURCE_TAG = "dictionary-chain"
 
-CLAIM_KINDS: tuple[str, ...] = ("canonical", "original")
-
 # Journal event types the SDF-6 scrutiny API surfaces to SDF-14 (story 21).
 # Read straight from ``journal.jsonl`` — the machine stays the only writer
 # and no vote event is ever copied into the claim-only ``meta.jsonl``.
@@ -51,30 +49,9 @@ VOTE_EVENT_TYPES: tuple[str, ...] = (
 )
 
 
-def now_iso() -> str:
-    """UTC ISO-8601 timestamp; injectable as ``clock`` for determinism."""
-    return datetime.now(timezone.utc).isoformat()
-
-
 def slug(text: str) -> str:
-    """Path-safe lowercase slug: ``[a-z0-9]`` runs joined by ``-``.
-
-    Truncated to 40 chars; a text with no alphanumerics slugs to ``"x"`` so
-    the component is never empty and never contains ``/``, ``..`` or
-    whitespace.
-    """
-    runs: list[str] = []
-    current = ""
-    for ch in str(text).lower():
-        if "a" <= ch <= "z" or "0" <= ch <= "9":
-            current += ch
-        elif current:
-            runs.append(current)
-            current = ""
-    if current:
-        runs.append(current)
-    out = "-".join(runs)[:40]
-    return out or "x"
+    """Path-safe lowercase slug: ``[a-z0-9]`` runs joined by ``-``."""
+    return re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-")[:40] or "x"
 
 
 def make_board_id(x: str, label: str, counter: int) -> str:
@@ -122,17 +99,7 @@ class BoardRecord:
     created_at: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "board_id": self.board_id,
-            "x": self.x,
-            "x_norm": self.x_norm,
-            "x_title": self.x_title,
-            "label": self.label,
-            "mode": self.mode,
-            "medium": self.medium,
-            "status": self.status,
-            "created_at": self.created_at,
-        }
+        return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "BoardRecord":
@@ -168,37 +135,11 @@ class ClaimProvenance:
     pulled_at: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "node_id": self.node_id,
-            "kind": self.kind,
-            "claimed_by": self.claimed_by,
-            "source": self.source,
-            "x": self.x,
-            "sense_id": self.sense_id,
-            "gloss": self.gloss,
-            "pos": self.pos,
-            "wiktionary_sense_no": self.wiktionary_sense_no,
-            "cite_sources": list(self.cite_sources),
-            "cites": [dict(c) for c in self.cites],
-            "pulled_at": self.pulled_at,
-        }
+        return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "ClaimProvenance":
-        return cls(
-            node_id=d["node_id"],
-            kind=d.get("kind", "original"),
-            claimed_by=d.get("claimed_by"),
-            source=d.get("source"),
-            x=d.get("x"),
-            sense_id=d.get("sense_id"),
-            gloss=d.get("gloss"),
-            pos=d.get("pos"),
-            wiktionary_sense_no=d.get("wiktionary_sense_no"),
-            cite_sources=list(d.get("cite_sources", [])),
-            cites=[dict(c) for c in d.get("cites", [])],
-            pulled_at=d.get("pulled_at"),
-        )
+        return cls(**d)
 
 
 @dataclass
@@ -217,19 +158,7 @@ class ClaimResult:
     revision_event: dict | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "board_id": self.board_id,
-            "node_id": self.node_id,
-            "version": self.version,
-            "text": self.text,
-            "is_active": self.is_active,
-            "prev_node_id": self.prev_node_id,
-            "is_revision": self.is_revision,
-            "frozen_q_ids": list(self.frozen_q_ids),
-            "provenance": dict(self.provenance),
-            "revision_event": (
-                dict(self.revision_event) if self.revision_event else None),
-        }
+        return asdict(self)
 
 
 @dataclass
@@ -258,11 +187,8 @@ def canonical_provenance(*, node_id: str, sense: dict, x: str,
                          claimed_by: str | None) -> ClaimProvenance:
     """Provenance for a claimed canonical: verbatim gloss + its cites."""
     cites = [dict(c) for c in sense.get("cites", [])]
-    sources: list[str] = []
-    for cite in cites:
-        src = str(cite.get("source", ""))
-        if src and src not in sources:
-            sources.append(src)
+    sources = list(dict.fromkeys(
+        str(cite.get("source", "")) for cite in cites if str(cite.get("source", ""))))
     return ClaimProvenance(
         node_id=node_id,
         kind="canonical",
@@ -301,27 +227,11 @@ class AllegationResult:
     opened_seq: int            # state.questions[q_id].opened_seq
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "board_id": self.board_id,
-            "node_id": self.node_id,
-            "ce_id": self.ce_id,
-            "q_id": self.q_id,
-            "shape": self.shape,
-            "opened_by": self.opened_by,
-            "opened_seq": self.opened_seq,
-        }
+        return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "AllegationResult":
-        return cls(
-            board_id=d["board_id"],
-            node_id=d["node_id"],
-            ce_id=d["ce_id"],
-            q_id=d["q_id"],
-            shape=d["shape"],
-            opened_by=d.get("opened_by"),
-            opened_seq=d["opened_seq"],
-        )
+        return cls(**d)
 
 
 @dataclass(frozen=True)
@@ -344,42 +254,11 @@ class VoteResult:
     refuted: bool              # machine.is_refuted(node_id) AFTER the vote
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "board_id": self.board_id,
-            "node_id": self.node_id,
-            "ce_id": self.ce_id,
-            "q_id": self.q_id,
-            "ballot_id": self.ballot_id,
-            "handle_id": self.handle_id,
-            "display": self.display,
-            "channel": self.channel,
-            "side": self.side,
-            "reason": self.reason,
-            "counted": self.counted,
-            "replaced_ballot_id": self.replaced_ballot_id,
-            "seq": self.seq,
-            "refuted": self.refuted,
-        }
+        return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "VoteResult":
-        return cls(
-            board_id=d["board_id"],
-            node_id=d["node_id"],
-            ce_id=d.get("ce_id"),
-            q_id=d["q_id"],
-            ballot_id=d["ballot_id"],
-            handle_id=d["handle_id"],
-            display=d["display"],
-            channel=d["channel"],
-            side=d["side"],
-            reason=d.get("reason"),
-            # Fused from panel a: coerce JSON 0/1 back to bool on reload.
-            counted=bool(d["counted"]),
-            replaced_ballot_id=d.get("replaced_ballot_id"),
-            seq=d["seq"],
-            refuted=bool(d["refuted"]),
-        )
+        return cls(**d)
 
 
 @dataclass(frozen=True)
@@ -394,56 +273,20 @@ class TiebreakResult:
     opened_seq: int
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "board_id": self.board_id,
-            "ce_id": self.ce_id,
-            "tiebreak_q_id": self.tiebreak_q_id,
-            "opened_by": self.opened_by,
-            "opened_seq": self.opened_seq,
-        }
+        return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "TiebreakResult":
-        return cls(
-            board_id=d["board_id"],
-            ce_id=d["ce_id"],
-            tiebreak_q_id=d["tiebreak_q_id"],
-            opened_by=d.get("opened_by"),
-            opened_seq=d["opened_seq"],
-        )
-
-
-def build_claim_recorded(payload: dict) -> dict:
-    """Event body for a recorded claim (payload only; ``MetaLog`` adds the
-    ``seq``/``board_id``/``ts`` envelope)."""
-    return {"type": CLAIM_RECORDED, "payload": dict(payload)}
-
-
-def build_claim_revised(payload: dict) -> dict:
-    """Event body for a revision — the SDF-7 ``carried_unvoted`` contract."""
-    return {"type": CLAIM_REVISED, "payload": dict(payload)}
-
-
-def build_search_recorded(payload: dict) -> dict:
-    """Event body for one deliberate web trigger (SDF-16)."""
-    return {"type": SEARCH_RECORDED, "payload": dict(payload)}
-
-
-def build_sep_admitted(payload: dict) -> dict:
-    """Event body for one SEP admission (link-out or pasted excerpt)."""
-    return {"type": SEP_ADMITTED, "payload": dict(payload)}
+        return cls(**d)
 
 
 __all__ = [
     "CLAIM_RECORDED", "CLAIM_REVISED", "OPS_EVENT_TYPES", "TRAY_NAME",
-    "SOURCE_TAG", "CLAIM_KINDS", "VOTE_EVENT_TYPES", "MODES", "MEDIA",
+    "SOURCE_TAG", "VOTE_EVENT_TYPES",
     "SEARCH_RECORDED", "SEP_ADMITTED", "ON_DEMAND_EVENT_TYPES",
     "ALLOWED_EVENT_TYPES",
-    "Mode", "Medium",
     "now_iso", "slug", "make_board_id", "next_label",
     "BoardRecord", "ClaimProvenance", "ClaimResult", "OpenResult",
     "AllegationResult", "VoteResult", "TiebreakResult",
     "canonical_provenance", "original_provenance",
-    "build_claim_recorded", "build_claim_revised",
-    "build_search_recorded", "build_sep_admitted",
 ]

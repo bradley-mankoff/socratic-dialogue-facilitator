@@ -66,7 +66,7 @@ def test_search_appends_one_meta_event_with_envelope(open_ctx):
     assert envelope["ts"] == TS
     assert envelope["payload"] is payload or envelope["payload"] == payload
     assert payload["search_id"] == "srch1"
-    assert payload["requested_by"] == "Cephalus"
+    assert payload["triggered_by"] == "Cephalus"
     assert payload["kind"] == "web-search" and payload["canonical"] is False
     # the durable home is the meta sidecar, not the journal
     sidecar = svc.meta.path_for(bid)
@@ -109,9 +109,9 @@ def test_triggers_are_replayed_from_disk_after_reload(tmp_path):
     svc.search_counterexamples(bid, triggered_by="Cephalus")
     svc.attach_sep(bid, triggered_by="Cephalus", excerpt=EXCERPT,
                    speaker="Cephalus")
-    reopened = BoardService.open(tmp_path / "store")
+    reopened = BoardService(tmp_path / "store")
     assert reopened.on_demand(bid) == svc.on_demand(bid)
-    assert reopened.counterexamples(bid)["sep"][0]["excerpt"] == EXCERPT
+    assert reopened.on_demand(bid)["sep"][0]["excerpt"] == EXCERPT
 
 
 # -- F15 SEP admits: link + paste, ids, labels --------------------------------

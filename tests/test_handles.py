@@ -61,8 +61,8 @@ def test_facilitator_never_proposes_close(make_env):
     with pytest.raises(FacilitatorNeverProposes):
         m.open_governance_q("close", opened_by=env.f)
     with pytest.raises(FacilitatorNeverProposes):
-        m.propose_close(opened_by=env.f)
-    qc = m.propose_close(opened_by=env.h["a"])
+        m.open_governance_q("close", opened_by=env.f)
+    qc = m.open_governance_q("close", opened_by=env.h["a"])
     assert m.state.questions[qc].kind == "close"
 
 

@@ -182,3 +182,20 @@ def test_merriam_webster_vote_ranked_first_when_key_configured():
     mw_calls = [call for call in stub.calls if "dictionaryapi.com" in call]
     assert mw_calls
     assert all("key=test-key" in call for call in mw_calls)
+
+
+def test_punct_only_query_returns_empty_without_network():
+    stub = _stub(
+        wik=_wik_fixture(),
+        freed=_fd_fixture(),
+    )
+    result = _chain(stub).get("!!!")
+    assert result.state == "empty" and result.empty_reason == "no_hit"
+    assert stub.calls == []
+
+
+def test_wiktionary_pageid_reaches_anchor_cite():
+    stub = _stub(wik=_wik_fixture(), freed=_fd_fixture())
+    result = _chain(stub).get("Justice")
+    assert result.senses[0].cites[0].pageid == 56878
+    assert result.senses[0].cites[0].url.startswith("https://en.wiktionary.org/")

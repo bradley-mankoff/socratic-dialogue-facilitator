@@ -4,7 +4,6 @@ from dictionary.normalize import (
     JACCARD_THRESHOLD,
     gloss_tokens,
     jaccard,
-    normalize_gloss,
     normalize_x,
 )
 
@@ -41,4 +40,9 @@ def test_jaccard_empty_token_sets_is_zero():
 
 def test_threshold_is_exactly_point_six():
     assert JACCARD_THRESHOLD == 0.6
-    assert normalize_gloss("  The   LAW. ") == "the law."
+    assert normalize_x("  The   LAW. ") == "the law."
+
+
+def test_normalize_key_trims_trailing_punctuation():
+    from dictionary.normalize import normalize_key
+    assert normalize_key("  Justice!! ") == "justice"

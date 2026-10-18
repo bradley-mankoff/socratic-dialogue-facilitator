@@ -17,7 +17,7 @@ from board.machine import (
     TiebreakNotPassed,
     VerdictError,
 )
-from server.errors import UnknownCounterexample
+from board.machine import UnknownCounterexample
 from server.model import TiebreakResult
 from tests.sdf6_stubs import make_svc
 

@@ -19,7 +19,7 @@ def test_strict_majority_refutes(make_env):
     assert m.census(q) == frozenset(env.h[n] for n in ("a", "b", "c"))
     assert m.is_standing(env.ce)
     assert m.is_refuted(env.ce) is True
-    assert m.node_is_refuted(env.node)
+    assert m.is_refuted(env.node)
     # refutation Qs never settle on majority — they stay open for re-votes
     assert m.q_status(q)[0] == "open"
 
@@ -127,7 +127,7 @@ def test_revote_refutes_then_unrefutes_active_node(make_env):
     m.cast(q, env.h["b"], "explicit", "stands")
     m.cast(q, env.h["c"], "explicit", "rebutted")
     assert m.is_refuted(env.ce) is True
-    assert m.node_is_refuted(env.node) is True
+    assert m.is_refuted(env.node) is True
     # re-vote: latest counts both ways — b flips to rebutted
     m.cast(q, env.h["b"], "explicit", "rebutted")
     assert m.is_refuted(env.ce) is False
@@ -151,5 +151,5 @@ def test_inactive_node_revote_refused_and_frozen(make_env):
         m.cast(q, env.h["a"], "explicit", "rebutted")
     # frozen verdict unchanged
     assert m.is_refuted(env.ce) is True
-    assert m.node_is_refuted(env.node) is True
+    assert m.is_refuted(env.node) is True
     assert m.state.active_node_id == n2

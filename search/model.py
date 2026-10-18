@@ -18,7 +18,7 @@ The vocabulary here is deliberately **disjoint** from
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -42,13 +42,6 @@ SEARCH_STATES: tuple[str, ...] = ("ok", "empty", "unavailable")
 COUNTEREXAMPLES_SECTION_KIND = "counterexamples"
 ON_DEMAND_SECTION_LABEL = (
     "counterexample material — web/SEP voices; never canonicals")
-
-# Fused a+b alias names: panel a spells the same header
-# ``ON_DEMAND_KIND`` / ``ON_DEMAND_LABEL``. Both names stay exported so
-# either spelling resolves to the identical section.
-ON_DEMAND_KIND = COUNTEREXAMPLES_SECTION_KIND
-ON_DEMAND_LABEL = ON_DEMAND_SECTION_LABEL
-
 
 def default_query(x: str) -> str:
     """Fallback query for one X (fused from panel a).
@@ -78,29 +71,11 @@ class WebHit:
     canonical: bool = False
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "title": self.title,
-            "url": self.url,
-            "snippet": self.snippet,
-            "engine": self.engine,
-            "retrieved_at": self.retrieved_at,
-            "kind": self.kind,
-            "source": self.source,
-            "canonical": self.canonical,
-        }
+        return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "WebHit":
-        return cls(
-            title=d.get("title", ""),
-            url=d.get("url", ""),
-            snippet=d.get("snippet", ""),
-            engine=d.get("engine", WEB_SOURCE.rsplit("-", 1)[0]),
-            retrieved_at=d.get("retrieved_at", ""),
-            kind=d.get("kind", WEB_SEARCH_KIND),
-            source=d.get("source", WEB_SOURCE),
-            canonical=bool(d.get("canonical", False)),
-        )
+        return cls(**d)
 
 
 @dataclass
@@ -217,42 +192,17 @@ class SepEntry:
                     f"({len(self.excerpt)})")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "origin": self.origin,
-            "url": self.url,
-            "excerpt": self.excerpt,
-            "speaker": self.speaker,
-            "retrieved_at": self.retrieved_at,
-            "kind": self.kind,
-            "source": self.source,
-            "source_label": self.source_label,
-            "canonical": self.canonical,
-            "x": self.x,
-            "citation": self.citation,
-        }
+        return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "SepEntry":
-        return cls(
-            origin=d.get("origin", SEP_ORIGIN_LINK),
-            url=d.get("url"),
-            excerpt=d.get("excerpt"),
-            speaker=d.get("speaker"),
-            retrieved_at=d.get("retrieved_at", ""),
-            kind=d.get("kind", SEP_KIND),
-            source=d.get("source", SEP_SOURCE),
-            source_label=d.get("source_label", SEP_SOURCE_LABEL),
-            canonical=bool(d.get("canonical", False)),
-            x=d.get("x"),
-            citation=d.get("citation", ""),
-        )
+        return cls(**d)
 
 
 __all__ = [
     "WEB_SEARCH_KIND", "SEP_KIND", "WEB_SOURCE", "SEP_SOURCE",
     "SEP_SOURCE_LABEL", "SEP_ORIGIN_LINK", "SEP_ORIGIN_PASTE", "SEP_SITE",
     "EXCERPT_MAX_CHARS", "WEB_RESULT_LABEL", "SEARCH_STATES",
-    "COUNTEREXAMPLES_SECTION_KIND", "ON_DEMAND_SECTION_LABEL",
-    "ON_DEMAND_KIND", "ON_DEMAND_LABEL", "default_query",
+    "COUNTEREXAMPLES_SECTION_KIND", "ON_DEMAND_SECTION_LABEL", "default_query",
     "now_iso", "WebHit", "CounterexampleResult", "SepEntry",
 ]

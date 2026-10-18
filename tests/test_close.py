@@ -14,7 +14,7 @@ def test_facilitator_never_proposes_close(make_env):
 
 
 def _close_by_vote(m, opened_by, voters):
-    qc = m.propose_close(opened_by=opened_by)
+    qc = m.open_governance_q("close", opened_by=opened_by)
     for who in voters:
         m.cast(qc, who, "explicit", "for")
     return qc
@@ -116,7 +116,7 @@ def _make_closed_board(store, create=True):
     ce1, q1 = m.open_refutation_q(n1, "3a", opened_by=h1)
     m.cast(q1, h1, "explicit", "stands")
     m.cast(q1, h2, "explicit", "rebutted")
-    qc = m.propose_close(opened_by=h1)
+    qc = m.open_governance_q("close", opened_by=h1)
     m.cast(qc, h1, "explicit", "for")
     m.cast(qc, h2, "explicit", "for")
     return m

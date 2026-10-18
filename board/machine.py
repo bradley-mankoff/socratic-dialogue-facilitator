@@ -107,17 +107,6 @@ class UnknownNode(VerdictError):
     """No such node."""
 
 
-class InvalidGovernanceSubject(UnknownHandle, UnknownNode, ValueError):
-    """Fused a+b nameless-subject refusal (stories 22 / active-switch).
-
-    Panel a's tests expect ``UnknownHandle``/``UnknownNode`` for a missing
-    swap/switch subject (``None``); panel b's expect ``ValueError`` for a
-    nameless (``None``/``""``) subject. This hybrid subclasses all three
-    so ``pytest.raises`` with any of them passes, while the message stays
-    the panel-b ``ValueError`` wording. Normal unknown (non-blank) targets
-    still raise the plain ``UnknownHandle``/``UnknownNode`` below."""
-
-
 class UnknownCounterexample(VerdictError):
     """No such counterexample."""
 
@@ -132,11 +121,6 @@ class NoBoard(VerdictError):
 
 class BoardAlreadyExists(VerdictError):
     """create_board on a machine that already holds a board."""
-
-
-# Fused from panel c (additive, no behaviour change to panel-a semantics).
-class GovernanceNotSettled(VerdictError):
-    """Governance effect fired without its settled 'for' Q (fused from c)."""
 
 
 class NotActiveNode(NodeFrozen):
@@ -313,18 +297,6 @@ def fold_events(events: list[dict], initial: BoardState | None = None) -> BoardS
     return state
 
 
-def apply_event(state: BoardState | None, event: dict) -> BoardState:
-    """Single-event reducer under panel-c's public name (fused compat).
-
-    Mutates and returns ``state`` (creating it for the first event), so
-    ``board.store`` can fold with one shared code path under either name.
-    """
-    if state is None:
-        state = _empty_state()
-    _apply(state, event)
-    return state
-
-
 def _iso_ts() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -374,11 +346,6 @@ class VerdictMachine:
         m.create_board("board-in-memory", "Justice (Republic Book I)",
                        mode=mode, medium=medium)
         return m
-
-    @classmethod
-    def open(cls, store, board_id: str) -> "VerdictMachine":
-        """Reopen a persisted board from its journal (fused from c)."""
-        return cls(store=store, board_id=board_id)
 
     # -- state access ------------------------------------------------------
 
@@ -430,10 +397,7 @@ class VerdictMachine:
         return h
 
     def _open_roster(self) -> list[str]:
-        return sorted(
-            h.handle_id for h in self._state.handles.values()
-            if not h.is_facilitator
-            or (h.is_facilitator and self._state.mode == "participates"))
+        return sorted(V.franchise(self._state))
 
     def _recompute_active_node_status(self) -> None:
         nid = self._state.active_node_id
@@ -647,6 +611,22 @@ class VerdictMachine:
 
     # -- canvas --------------------------------------------------------------
 
+    def _supersede(self, prev: str | None) -> None:
+        if prev is None:
+            return
+        node = self._state.nodes[prev]
+        new_status = ("refuted" if V.is_refuted(self._state, prev)
+                      else "unrefuted")
+        if node.status != new_status:
+            self._commit("node_status_changed",
+                         {"node_id": prev, "status": new_status})
+        for ce_id in node.ce_ids:
+            q_id = self._state.ces[ce_id].q_id
+            if self._state.questions[q_id].status == "open":
+                outcome = V.refutation_outcome(self._state, ce_id)
+                self._commit("q_frozen",
+                             {"q_id": q_id, "outcome": outcome})
+
     def register_node(self, node_id: str, text: str,
                       defender: str | None = None) -> str:
         self._check_open()
@@ -667,20 +647,7 @@ class VerdictMachine:
             "node_id": node_id, "text": text, "version": version,
             "prev_active_node_id": prev, "defender": defender,
         })
-        if prev is not None:
-            node = self._state.nodes[prev]
-            new_status = ("refuted" if V.is_refuted(self._state, prev)
-                          else "unrefuted")
-            if node.status != new_status:
-                self._commit("node_status_changed",
-                             {"node_id": prev, "status": new_status})
-            # superseded node's open CE Qs settle NOW (frozen outcome)
-            for ce_id in node.ce_ids:
-                q_id = self._state.ces[ce_id].q_id
-                if self._state.questions[q_id].status == "open":
-                    outcome = V.refutation_outcome(self._state, ce_id)
-                    self._commit("q_frozen",
-                                 {"q_id": q_id, "outcome": outcome})
+        self._supersede(prev)
         return node_id
 
     def activate_node(self, node_id: str) -> dict | None:
@@ -701,19 +668,7 @@ class VerdictMachine:
         event = self._commit("active_switch_applied", {
             "node_id": node_id, "prev_active_node_id": prev,
         })
-        if prev is not None:
-            old = self._state.nodes[prev]
-            new_status = ("refuted" if V.is_refuted(self._state, prev)
-                          else "unrefuted")
-            if old.status != new_status:
-                self._commit("node_status_changed",
-                             {"node_id": prev, "status": new_status})
-            for ce_id in old.ce_ids:
-                q_id = self._state.ces[ce_id].q_id
-                if self._state.questions[q_id].status == "open":
-                    outcome = V.refutation_outcome(self._state, ce_id)
-                    self._commit("q_frozen",
-                                 {"q_id": q_id, "outcome": outcome})
+        self._supersede(prev)
         self._recompute_active_node_status()
         return event
 
@@ -767,28 +722,11 @@ class VerdictMachine:
             if subject == "facilitates":
                 self._check_no_facilitator_role()      # G7
         elif kind == "socrates_swap":
-            # Fused a+b: nameless swaps refuse with ValueError (panel b),
-            # unknown targets refuse with UnknownHandle and never
-            # auto-enroll (panels a+b). The seat moves only via a settled
-            # named swap; a vacating open can never move it (AC1).
-            # Hybrid raise satisfies both panels' `pytest.raises` shapes.
-            if (not subject or not isinstance(subject, str)
-                    or not subject.strip()):
-                raise InvalidGovernanceSubject(
-                    "a socrates_swap question must name a target handle")
             if subject not in self._state.handles:
                 raise UnknownHandle(f"unknown handle: {subject}")
             R.check_seat_eligible(self._state, subject,
                                   FacilitatorHoldsNoSeat)  # G5
         elif kind == "active_claim_switch":
-            # Fused a+b: nameless ValueError (b) + unknown UnknownNode (a)
-            # + already-active VerdictError on either pointer equality or
-            # the node's stored flag (a) + G6 defender eligibility (a).
-            # Hybrid raise satisfies both panels' `pytest.raises` shapes.
-            if (not subject or not isinstance(subject, str)
-                    or not subject.strip()):
-                raise InvalidGovernanceSubject(
-                    "an active_claim_switch question must name a node")
             if subject not in self._state.nodes:
                 raise UnknownNode(f"unknown node: {subject}")
             target = self._state.nodes[subject]
@@ -818,29 +756,11 @@ class VerdictMachine:
                     "rotate the facilitator out of the seat/defense before "
                     "entering facilitates mode")
 
-    def propose_close(self, opened_by: str | None = None) -> str:
-        """Alias for open_governance_q("close", ...); the facilitator is
-        refused structurally (FacilitatorNeverProposes)."""
-        return self.open_governance_q("close", opened_by=opened_by)
-
     # -- votes ----------------------------------------------------------------
 
     def cast(self, q_id: str, handle_id: str, channel: str, side: str,
              reason: str | None = None,
              receive_time: float | None = None) -> str:
-        return self._cast(q_id, handle_id, channel, side,
-                          reason=reason, receive_time=receive_time)
-
-    def record_ambient(self, q_id: str, handle_id: str, side: str,
-                       receive_time: float | None = None) -> str:
-        return self._cast(q_id, handle_id, "ambient", side,
-                          receive_time=receive_time)
-
-    def _cast(self, q_id: str, handle_id: str, channel: str, side: str,
-              *, reason: str | None = None,
-              receive_time: float | None = None,
-              etype: str = "ballot_cast",
-              labeled: bool = False) -> str:
         self._check_open()
         q = self._get_q(q_id)
         self._get_handle(handle_id)
@@ -867,13 +787,18 @@ class VerdictMachine:
         else:
             receive_time = float(receive_time)
         ballot_id = f"b{len(self._state.ballots) + 1}"
-        self._commit(etype, {
+        self._commit("ballot_cast", {
             "ballot_id": ballot_id, "q_id": q_id, "handle_id": handle_id,
             "channel": channel, "side": side, "reason": reason,
-            "labeled": labeled, "receive_time": receive_time,
+            "labeled": False, "receive_time": receive_time,
         })
         self._settle_tail(q_id)
         return ballot_id
+
+    def record_ambient(self, q_id: str, handle_id: str, side: str,
+                       receive_time: float | None = None) -> str:
+        return self.cast(q_id, handle_id, "ambient", side,
+                         receive_time=receive_time)
 
     def retract(self, q_id: str, handle_id: str,
                 receive_time: float | None = None) -> None:
@@ -1088,12 +1013,6 @@ class VerdictMachine:
             raise UnknownNode(f"unknown node/ce: {ce_id_or_node_id}")
         return V.is_refuted(self._state, node_id)
 
-    def node_is_refuted(self, node_id: str) -> bool:
-        self._require_board()
-        if node_id not in self._state.nodes:
-            raise UnknownNode(f"unknown node: {node_id}")
-        return V.is_refuted(self._state, node_id)
-
     def q_status(self, q_id: str) -> tuple[str, str | None]:
         self._require_board()
         q = self._get_q(q_id)
@@ -1106,53 +1025,3 @@ class VerdictMachine:
     def governance_passed(self, q_id: str) -> str | None:
         self._require_board()
         return V.governance_passed(self._state, q_id)
-
-    # -- fused read-side additions from panel c (all thin wrappers) --------
-
-    def board_census(self) -> frozenset[str]:
-        """Whole-board franchise snapshot (fused from c)."""
-        self._require_board()
-        return V.board_census(self._state)
-
-    def counted_all(self, q_id: str) -> dict:
-        """Every counted ballot on a Q keyed by handle (fused from c)."""
-        self._require_board()
-        self._get_q(q_id)
-        return V.counted(self._state, q_id)
-
-    def standing_counts_from_q(self, q_id: str) -> tuple[int, int]:
-        """(stands, rebutted) directly from a refutation Q (fused from c)."""
-        self._require_board()
-        self._get_q(q_id)
-        return V.standing_counts_from_q(self._state, q_id)
-
-    def ce_is_standing(self, ce_id: str) -> bool:
-        """CE-level standing alias (fused from c)."""
-        return self.is_standing(ce_id)
-
-    def ce_is_refuted(self, ce_id: str) -> bool:
-        """CE-level refute predicate (fused from c)."""
-        self._require_board()
-        if ce_id not in self._state.ces:
-            raise UnknownCounterexample(f"unknown ce: {ce_id}")
-        return V.ce_is_refuted(self._state, ce_id)
-
-    def node_status(self, node_id: str) -> str:
-        """Stored status string of a node (fused from c)."""
-        self._require_board()
-        node = self._state.nodes.get(node_id)
-        if node is None:
-            raise UnknownNode(f"unknown node: {node_id}")
-        return node.status
-
-    def tie_exemption(self, q_id: str) -> str | None:
-        """1-human exempt handle on a Q, if active (fused from c)."""
-        self._require_board()
-        self._get_q(q_id)
-        return V.tie_exemption_handle(self._state, q_id)
-
-    def decisive_side(self, q_id: str) -> str | None:
-        """Exempt human's side on a true tie, else None (fused from c)."""
-        self._require_board()
-        self._get_q(q_id)
-        return V.decisive_side(self._state, q_id)

@@ -1,43 +1,6 @@
-"""SDF-5 board-operations errors.
-
-Base :class:`BoardOpError` covers everything this slice raises so callers
-can catch the whole surface with one except clause. Machine errors
-(:class:`BoardClosed`, :class:`UnknownHandle`, ...) are **re-exported, never
-redefined**: the SDF-2 ``VerdictMachine`` stays the single authority for
-verdict-state errors, and downstream code (SDF-6/7/10/11/18) can import the
-whole error vocabulary from :mod:`server` without importing ``board.machine``
-directly.
-"""
+"""SDF-5 board-operations errors."""
 
 from __future__ import annotations
-
-from board.machine import (  # noqa: F401  (re-export is the point)
-    BoardAlreadyExists,
-    BoardClosed,
-    DuplicateTiebreak,
-    FacilitatorCannotVote,
-    FacilitatorHoldsNoSeat,
-    FacilitatorNeverProposes,
-    GovernanceNotSettled,
-    InvalidGovernanceSubject,
-    ModeSwitchNotSettled,
-    NoBoard,
-    NoPendingCede,
-    NodeFrozen,
-    NotActiveNode,
-    NotCedeTarget,
-    NotDefender,
-    QNotOpen,
-    SeatNeverVacant,
-    SideMismatch,
-    StaleCede,
-    TiebreakNotPassed,
-    UnknownCounterexample,
-    UnknownHandle,
-    UnknownNode,
-    UnknownQuestion,
-    VerdictError,
-)
 
 
 class BoardOpError(RuntimeError):
@@ -73,8 +36,7 @@ class BlankClaim(BoardOpError):
 
 
 class DuplicateLabel(BoardOpError):
-    """Registry-level ``(X, label)`` collision (defensive: ``open_board``
-    treats a taken key as the get path)."""
+    """Registry-level ``(X, label)`` collision."""
 
 
 class GovernanceAlreadyOpen(BoardOpError):
@@ -90,17 +52,6 @@ class NotAGovernanceQuestion(BoardOpError):
     """A governance-only call was aimed at a refutation question."""
 
 
-# SDF-16 search errors — re-exported, never redefined (same rule as the
-# machine errors above): ``search`` owns its vocabulary, ``server`` merely
-# surfaces it so downstream code can catch everything from one module.
-from search.errors import (  # noqa: E402,F401  (re-export is the point)
-    BadSepSource,
-    MissingSearchKey,
-    NoSearchProvider,
-    SearchError,
-)
-
-
 __all__ = [
     "BoardOpError",
     "UnknownBoard",
@@ -114,35 +65,4 @@ __all__ = [
     "GovernanceAlreadyOpen",
     "GovernanceNoOp",
     "NotAGovernanceQuestion",
-    # re-exported from the SDF-16 search package
-    "SearchError",
-    "MissingSearchKey",
-    "NoSearchProvider",
-    "BadSepSource",
-    # re-exported from the SDF-2 machine
-    "BoardClosed",
-    "BoardAlreadyExists",
-    "NoBoard",
-    "NodeFrozen",
-    "NotActiveNode",
-    "VerdictError",
-    "GovernanceNotSettled",
-    "ModeSwitchNotSettled",
-    "UnknownCounterexample",
-    "DuplicateTiebreak",
-    "TiebreakNotPassed",
-    "SideMismatch",
-    "QNotOpen",
-    "FacilitatorCannotVote",
-    "FacilitatorHoldsNoSeat",
-    "FacilitatorNeverProposes",
-    "SeatNeverVacant",
-    "InvalidGovernanceSubject",
-    "NotDefender",
-    "NoPendingCede",
-    "NotCedeTarget",
-    "StaleCede",
-    "UnknownQuestion",
-    "UnknownHandle",
-    "UnknownNode",
 ]

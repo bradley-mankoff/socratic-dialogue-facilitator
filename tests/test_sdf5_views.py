@@ -207,7 +207,7 @@ def test_sync_registry_after_close(sdf5_open):
     ctx = sdf5_open
     service, machine, bid = ctx.service, ctx.machine, ctx.board_id
     service.claim_original(bid, THRASYMACHUS, claimant_display="Cephalus")
-    close_q = machine.propose_close(opened_by=ctx.h["Cephalus"])
+    close_q = machine.open_governance_q("close", opened_by=ctx.h["Cephalus"])
     for who in ("Cephalus", "Polemarchus"):        # 2/3 census: majority
         machine.cast(close_q, ctx.h[who], "explicit", "for")
     assert machine.is_closed()

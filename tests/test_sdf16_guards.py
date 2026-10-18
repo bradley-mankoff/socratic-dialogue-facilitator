@@ -80,7 +80,7 @@ def test_unprompted_lifecycle_never_fires_the_provider(tmp_path):
     svc.list_boards(JUSTICE)
     svc.read_events(bid)
     svc.on_demand(bid)
-    svc.counterexamples(bid)
+    svc.on_demand(bid)
     svc.canonicals(bid)
     svc.provenance_map(bid)
     assert tripwire.calls == [], "an unprompted path touched the web seam"

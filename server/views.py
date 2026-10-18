@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 import board.verdicts as V
-from board import roles as R
+from board.roles import seats_view
 from board.model import BoardState
 from search.model import (
     COUNTEREXAMPLES_SECTION_KIND,
@@ -31,14 +31,13 @@ NOT_PULLED = "not_pulled"
 def _handle_sort_key(handle_id: str) -> tuple:
     """h1 < h2 < h10 — ids are machine-minted ``n<seq>``."""
     text = str(handle_id)
-    digits = ""
     for index, ch in enumerate(text):
         if ch.isdigit():
             return (int(text[index:]), text)
     return (0, text)
 
 
-def node_view(state: BoardState, node,
+def node_view(node,
               provenance: dict | None = None) -> dict[str, Any]:
     """One version node: text, lineage, its CEs and its claim provenance."""
     return {
@@ -54,10 +53,7 @@ def node_view(state: BoardState, node,
 
 def question_view(state: BoardState, q) -> dict[str, Any]:
     """One question: status/outcome plus the counted tally and census."""
-    if q.kind == "refutation":
-        tally = dict(V.tally(state, q.q_id))
-    else:
-        tally = dict(V.gov_tally(state, q.q_id))
+    tally = dict(V.tally(state, q.q_id))
     return {
         "q_id": q.q_id,
         "kind": q.kind,
@@ -84,11 +80,8 @@ def canonicals_view(snapshot: dict | None) -> dict[str, Any]:
     senses = []
     for sense in snapshot.get("senses", []):
         cites = [dict(c) for c in sense.get("cites", [])]
-        agrees: list[str] = []
-        for cite in cites:
-            source = str(cite.get("source", ""))
-            if source and source not in agrees:
-                agrees.append(source)
+        agrees = list(dict.fromkeys(
+            str(cite.get("source", "")) for cite in cites if str(cite.get("source", ""))))
         senses.append({
             "sense_id": sense.get("sense_id"),
             "gloss": sense.get("gloss"),
@@ -124,10 +117,6 @@ def on_demand_view(events: list[dict]) -> dict[str, Any]:
     return section
 
 
-# Alias so both names work for SDF-10 renderers (one section, two spellings).
-counterexamples_view = on_demand_view
-
-
 def board_view(record, state: BoardState, provenance_map: dict[str, dict],
                snapshot: dict | None, *,
                shared_cache: bool = False,
@@ -140,6 +129,7 @@ def board_view(record, state: BoardState, provenance_map: dict[str, dict],
     nodes = sorted(state.nodes.values(),
                    key=lambda n: (n.version, _handle_sort_key(n.node_id)))
     questions = sorted(state.questions.values(), key=lambda q: q.opened_seq)
+    on_demand = on_demand_view(on_demand_events or [])
     return {
         "board_id": record.board_id,
         "x": record.x,
@@ -155,28 +145,18 @@ def board_view(record, state: BoardState, provenance_map: dict[str, dict],
                    key=lambda item: _handle_sort_key(item[0]))
         ],
         "active_node_id": state.active_node_id,
-        "nodes": [node_view(state, n, provenance_map.get(n.node_id))
+        "nodes": [node_view(n, provenance_map.get(n.node_id))
                   for n in nodes],
         "questions": [question_view(state, q) for q in questions],
-        "roles": roles_view(state),
+        "roles": dict(seats_view(state)),
         "canonicals": canonicals_view(snapshot),
         # SDF-16: one on-demand section under two alias keys — never inside
         # "canonicals"; searches[] are web voices, sep[] are philosopher
         # voices, both canonical False.
-        "on_demand": on_demand_view(on_demand_events or []),
-        "counterexamples": on_demand_view(on_demand_events or []),
+        "on_demand": on_demand,
+        "counterexamples": on_demand,
         "cache": {"shared": bool(shared_cache), "source": "registry"},
     }
-
-
-def roles_view(state: BoardState) -> dict[str, Any]:
-    """Fused from panel c: seats snapshot for the board header.
-
-    Pure read over :mod:`board.roles` (the same predicates the machine
-    enforces), so the UI seat display cannot disagree with the core:
-    ``socrates`` is stored truth, ``defense`` derives from the active
-    node's defender, ``pending_cede`` is the in-flight offer if any."""
-    return dict(R.seats_view(state))
 
 
 def boards_view(records: list) -> list[dict[str, Any]]:
@@ -326,7 +306,7 @@ def scoreboard_view(machine, node_id: str) -> dict[str, Any]:
 
 __all__ = [
     "NOT_PULLED", "node_view", "question_view", "canonicals_view",
-    "board_view", "boards_view", "roles_view",
+    "board_view", "boards_view",
     "vote_rows", "ce_rows", "scoreboard_view",
-    "on_demand_view", "counterexamples_view",
+    "on_demand_view",
 ]

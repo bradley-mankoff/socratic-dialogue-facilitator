@@ -1,23 +1,5 @@
 """Dictionary sources over the injectable Transport (SDF-3 story 8).
 
-Fused (panels a+b+c): panel-a revisions-wikitext parsing is canonical
-(the fixture glosses V/I/P + German decoy + ``#*``/``#:`` noise pin it).
-Layered on top, without changing any canonical parse:
-
-* Wiktionary ``pageid`` capture (panel b evidence, pageid 56878) into
-  :class:`RawSense.pageid` and :func:`source_cite` (the canonical cite
-  URL stays the article URL panel-a tests pin; the ``?curid=`` URL is
-  derivable from ``pageid``).
-* Shared status table :func:`classify_status` + URL prefix constants
-  (panel b ``sources_util``) and stability weights
-  :func:`stability_for` (panel c ranking tie-break).
-* :class:`RawSense` accepts panel-b spellings (``text``/``index``/
-  ``source``/``url``/``license``) as init aliases over the canonical
-  ``gloss``/``order`` fields.
-* Every source exposes ``fetch`` (canonical) plus ``query`` /
-  ``lookup`` / ``lookup_reported`` aliases (panels b/c) so all three
-  import surfaces work.
-
 Every source's ``fetch`` turns exactly one HTTP exchange into
 ``(senses, SourceOutcome)`` and never raises: connection failures and
 malformed bodies become ``unavailable``; upstream misses become
@@ -27,12 +9,10 @@ malformed bodies become ``unavailable``; upstream misses become
 from __future__ import annotations
 
 import json
-import re
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 from urllib.parse import quote, urlencode
 
-from dictionary.model import PRIMARY, Cite, SourceName, SourceOutcome, canonical_source
+from dictionary.model import PRIMARY, Cite, SourceName, SourceOutcome
 from dictionary.transport import Transport, TransportError
 
 WIKTIONARY_API = "https://en.wiktionary.org/w/api.php?"
@@ -46,12 +26,6 @@ MERRIAM_WEBSTER_API = (
 MERRIAM_WEBSTER_ARTICLE = "https://www.merriam-webster.com/dictionary/"
 MERRIAM_WEBSTER_LICENSE = "Merriam-Webster (attribution per publisher terms)"
 
-# Panel-b URL prefix constants (same endpoints, prefix form for route tables).
-WIKTIONARY_API_PREFIX = "https://en.wiktionary.org/w/api.php"
-FREE_DICT_PREFIX = FREE_DICTIONARY_API
-MERRIAM_WEBSTER_PREFIX = MERRIAM_WEBSTER_API
-
-# Panel-c stability weights: primary first, corroboration second, keyed third.
 STABILITY: dict[str, int] = {
     "wiktionary": 3,
     "free-dictionary": 2,
@@ -60,83 +34,18 @@ STABILITY: dict[str, int] = {
 
 
 def stability_for(source_name: str) -> int:
-    """Reliability weight used as a ranking tie-break (panel c)."""
-    return STABILITY.get(canonical_source(source_name), 0)
-
-
-def classify_status(status: int) -> tuple[str, str]:
-    """Shared status decision table (panel b ``sources_util``).
-
-    * 404 → ``("no_hit", "not_found")`` — evidence of absence.
-    * 5xx (and 408/429) → ``("down", "http_{code}")`` — source down.
-    * other 4xx → ``("down", "http_{code}")`` — unusable, not absence.
-    * 2xx → ``("ok", "ok")`` and the adapter parses the body.
-
-    The chain stores panel-a spellings (``no_entry``/``unavailable``);
-    this table documents the shared policy behind them.
-    """
-    if status == 404:
-        return "no_hit", "not_found"
-    if status >= 500 or status in (408, 429):
-        return "down", f"http_{status}"
-    if 200 <= status < 300:
-        return "ok", "ok"
-    return "down", f"http_{status}"
+    """Reliability weight used as a ranking tie-break."""
+    return STABILITY.get(str(source_name), 0)
 
 
 @dataclass
 class RawSense:
-    """One gloss exactly as its source published it (pre-consensus).
-
-    Canonical fields are ``gloss``/``pos``/``order`` (panel a). Panel-b
-    spellings (``text``/``index``/``source``/``url``/``license``) and the
-    Wiktionary ``pageid`` are accepted as init aliases and synced in
-    ``__post_init__`` so both surfaces observe the same sense.
-    """
+    """One gloss exactly as its source published it (pre-consensus)."""
 
     gloss: str = ""
     pos: str | None = None
     order: int = 0  # 1-based position within its source
     pageid: int | None = None
-    source: str | None = None
-    url: str | None = None
-    license: str | None = None
-    text: str | None = None
-    index: int | None = None
-
-    def __post_init__(self) -> None:
-        # Sync the two spellings both ways; canonical storage is gloss/order.
-        if not self.gloss and self.text:
-            self.gloss = self.text
-        if self.text is None:
-            self.text = self.gloss
-        if not self.order and self.index:
-            self.order = self.index
-        if self.index is None:
-            self.index = self.order
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "gloss": self.gloss,
-            "pos": self.pos,
-            "order": self.order,
-            "pageid": self.pageid,
-            "source": self.source,
-            "url": self.url,
-            "license": self.license,
-        }
-
-    @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "RawSense":
-        return cls(
-            gloss=d.get("gloss", d.get("text", "")),
-            pos=d.get("pos"),
-            order=d.get("order", d.get("index", 0)),
-            pageid=d.get("pageid"),
-            source=d.get("source"),
-            url=d.get("url"),
-            license=d.get("license", d.get("license_name")),
-        )
 
 
 def _slug(x: str) -> str:
@@ -158,13 +67,8 @@ def wiktionary_url(x: str) -> str:
 
 
 def wiktionary_cite_url(x: str, pageid: int | None = None) -> str:
-    """Article URL (canonical); ``?curid=`` form is derivable from pageid."""
+    """Article URL (canonical)."""
     return WIKTIONARY_ARTICLE + _slug(x)
-
-
-def wiktionary_curid_url(pageid: int) -> str:
-    """Panel-b stable cite URL for a known pageid (e.g. 56878)."""
-    return f"https://en.wiktionary.org/?curid={pageid}"
 
 
 def free_dictionary_url(x: str) -> str:
@@ -183,26 +87,25 @@ def source_cite(
     source: SourceName, x: str, access_date: str, pageid: int | None = None
 ) -> Cite:
     """Build a complete Source + URL + date + license record without I/O."""
-    canon = canonical_source(str(source))
-    if canon == "wiktionary":
-        return Cite(canon, wiktionary_cite_url(x), access_date, WIKTIONARY_LICENSE, pageid=pageid)
-    if canon == "free-dictionary":
+    if source == "wiktionary":
+        return Cite(source, wiktionary_cite_url(x), access_date, WIKTIONARY_LICENSE, pageid=pageid)
+    if source == "free-dictionary":
         return Cite(
-            canon, free_dictionary_url(x), access_date, FREE_DICTIONARY_LICENSE
+            source, free_dictionary_url(x), access_date, FREE_DICTIONARY_LICENSE
         )
-    if canon == "merriam-webster":
+    if source == "merriam-webster":
         return Cite(
-            canon, merriam_webster_cite_url(x), access_date, MERRIAM_WEBSTER_LICENSE
+            source, merriam_webster_cite_url(x), access_date, MERRIAM_WEBSTER_LICENSE
         )
     raise ValueError(f"unknown source: {source!r}")
 
 
-_LEVEL2 = re.compile(r"^==(?!=)([^=].*?)==")
-_LEVEL3 = re.compile(r"^===(?!=)(.+?)==")
-_LEVEL4 = re.compile(r"^====")
-_COMMENT = re.compile(r"<!--.*?-->", re.S)
-_REF = re.compile(r"<ref[^>]*>.*?</ref>|<ref[^>]*/\s*>", re.S | re.I)
-_TEMPLATE = re.compile(r"\{\{[^{}]*\}\}")
+_LEVEL2 = __import__("re").compile(r"^==(?!=)([^=].*?)==")
+_LEVEL3 = __import__("re").compile(r"^===(?!=)(.+?)===")
+_LEVEL4 = __import__("re").compile(r"^====")
+_COMMENT = __import__("re").compile(r"<!--.*?-->", __import__("re").S)
+_REF = __import__("re").compile(r"<ref[^>]*>.*?</ref>|<ref[^>]*/\s*>", __import__("re").S | __import__("re").I)
+_TEMPLATE = __import__("re").compile(r"\{\{[^{}]*\}\}")
 
 
 def _english_lines(wikitext: str) -> list[str]:
@@ -268,45 +171,30 @@ def _no_entry(source: SourceName, detail: str | None = None) -> tuple[list[RawSe
     return [], SourceOutcome(source, "no_entry", detail)
 
 
+def _get(url: str, transport: Transport):
+    """One HTTP exchange over the injectable transport."""
+    return transport.get(url)
+
+
 class WiktionarySource:
     """Primary source: Action API revisions wikitext, parsed per sense."""
 
     name: SourceName = PRIMARY
     license = WIKTIONARY_LICENSE
 
-    def __init__(self, transport: Any | None = None, accessed: str | None = None) -> None:
-        # Panel-c style injectable binding; canonical path passes transport
-        # per-call to ``fetch``, so both constructions work.
-        self.transport = transport
-        self.accessed = accessed
-
-    def _transport(self, transport: Any | None) -> Any:
-        return transport if transport is not None else self.transport
-
     def fetch(
-        self, x: str, transport: Transport | None = None
+        self, x: str, transport: Transport
     ) -> tuple[list[RawSense], SourceOutcome]:
-        transport = self._transport(transport)
-        if transport is None:  # pragma: no cover - defensive
-            return _unavailable(self.name, "TransportError: no transport")
-        # Support panel-c callable transports as well as panel-a get() ones.
-        get = getattr(transport, "get", None)
         try:
-            if callable(get):
-                response = get(wiktionary_url(x))
-            else:
-                response = transport(wiktionary_url(x))
+            response = _get(wiktionary_url(x), transport)
         except TransportError as exc:
             return _unavailable(self.name, f"TransportError: {exc}")
-        except Exception as exc:  # panel-c SourceUnavailable subclasses TransportError
+        except Exception as exc:
             return _unavailable(self.name, f"TransportError: {exc}")
         if response.status != 200:
             return _unavailable(self.name, f"HTTP {response.status}")
         try:
-            body = response.body
-            if isinstance(body, (bytes, bytearray)):
-                body = bytes(body).decode("utf-8", errors="replace")
-            payload = json.loads(body)
+            payload = json.loads(response.body)
             page = next(iter(payload["query"]["pages"].values()))
         except (ValueError, TypeError, KeyError, StopIteration, AttributeError):
             return _unavailable(self.name, "invalid JSON")
@@ -327,25 +215,6 @@ class WiktionarySource:
             return _no_entry(self.name)
         return senses, SourceOutcome(self.name, "ok", None)
 
-    # -- panel-b/c aliases -------------------------------------------------
-    def query(self, x: str, *args: Any, **kwargs: Any):
-        """Panel-b alias: returns a ``SourceOutcome`` carrying ``senses``."""
-        transport = kwargs.get("transport", args[0] if args else None)
-        senses, outcome = self.fetch(x, transport if transport is not None else self.transport)
-        outcome.senses = senses  # type: ignore[attr-defined]
-        try:
-            outcome.url_tried = wiktionary_url(x)  # type: ignore[attr-defined]
-        except Exception:
-            pass
-        return outcome
-
-    def lookup(self, term: str, transport: Any | None = None):
-        senses, outcome = self.fetch(term, transport if transport is not None else self.transport)
-        return senses, outcome
-
-    def lookup_reported(self, term: str):
-        return self.lookup(term, self.transport)
-
 
 class FreeDictionarySource:
     """Second vote: dictionaryapi.dev entry list (may be down with HTTP 522)."""
@@ -353,25 +222,11 @@ class FreeDictionarySource:
     name: SourceName = "free-dictionary"
     license = FREE_DICTIONARY_LICENSE
 
-    def __init__(self, transport: Any | None = None, accessed: str | None = None) -> None:
-        self.transport = transport
-        self.accessed = accessed
-
-    def _transport(self, transport: Any | None) -> Any:
-        return transport if transport is not None else self.transport
-
     def fetch(
-        self, x: str, transport: Transport | None = None
+        self, x: str, transport: Transport
     ) -> tuple[list[RawSense], SourceOutcome]:
-        transport = self._transport(transport)
-        if transport is None:  # pragma: no cover - defensive
-            return _unavailable(self.name, "TransportError: no transport")
-        get = getattr(transport, "get", None)
         try:
-            if callable(get):
-                response = get(free_dictionary_url(x))
-            else:
-                response = transport(free_dictionary_url(x))
+            response = _get(free_dictionary_url(x), transport)
         except TransportError as exc:
             return _unavailable(self.name, f"TransportError: {exc}")
         except Exception as exc:
@@ -381,10 +236,7 @@ class FreeDictionarySource:
         if response.status != 200:
             return _unavailable(self.name, f"HTTP {response.status}")
         try:
-            body = response.body
-            if isinstance(body, (bytes, bytearray)):
-                body = bytes(body).decode("utf-8", errors="replace")
-            payload = json.loads(body)
+            payload = json.loads(response.body)
         except (ValueError, TypeError):
             return _unavailable(self.name, "invalid JSON")
         if not isinstance(payload, list):
@@ -409,18 +261,6 @@ class FreeDictionarySource:
             return _no_entry(self.name)
         return senses, SourceOutcome(self.name, "ok", None)
 
-    def query(self, x: str, *args: Any, **kwargs: Any):
-        transport = kwargs.get("transport", args[0] if args else None)
-        senses, outcome = self.fetch(x, transport if transport is not None else self.transport)
-        outcome.senses = senses  # type: ignore[attr-defined]
-        return outcome
-
-    def lookup(self, term: str, transport: Any | None = None):
-        return self.fetch(term, transport if transport is not None else self.transport)
-
-    def lookup_reported(self, term: str):
-        return self.lookup(term, self.transport)
-
 
 class MerriamWebsterSource:
     """Keyed third vote. Only ever constructed when a key is configured."""
@@ -428,36 +268,17 @@ class MerriamWebsterSource:
     name: SourceName = "merriam-webster"
     license = MERRIAM_WEBSTER_LICENSE
 
-    def __init__(self, key: str, transport: Any | None = None, accessed: str | None = None) -> None:
-        # Panel-a: ``MerriamWebsterSource(key)``; panel-b: ``(transport, key)``.
-        # Accept both orders when the first arg looks like a transport.
-        if transport is None and not isinstance(key, str):
+    def __init__(self, key: str) -> None:
+        if not isinstance(key, str):
             raise ValueError("MerriamWebsterSource needs a key string")
         self.key = key
-        self.transport = transport
-        self.accessed = accessed
 
     def fetch(
-        self, x: str, transport: Transport | None = None
+        self, x: str, transport: Transport
     ) -> tuple[list[RawSense], SourceOutcome]:
-        transport = transport if transport is not None else self.transport
-        # Canonical path always passes transport explicitly; bound-transport
-        # fallback keeps panel-b/c constructions working.
-        if transport is None and isinstance(getattr(self, "key", None), str) is False:
-            return _unavailable(self.name, "TransportError: no transport")
-        t = transport if transport is not None else None
-        # When constructed as MerriamWebsterSource(key) the caller passes
-        # transport per-call; when constructed with a bound transport, use it.
-        active = t if t is not None else getattr(self, "transport", None)
         key = self.key if isinstance(self.key, str) else ""
-        if active is None:  # pragma: no cover - defensive
-            return _unavailable(self.name, "TransportError: no transport")
-        get = getattr(active, "get", None)
         try:
-            if callable(get):
-                response = get(merriam_webster_url(x, key))
-            else:
-                response = active(merriam_webster_url(x, key))
+            response = _get(merriam_webster_url(x, key), transport)
         except TransportError as exc:
             return _unavailable(self.name, f"TransportError: {exc}")
         except Exception as exc:
@@ -465,10 +286,7 @@ class MerriamWebsterSource:
         if response.status != 200:
             return _unavailable(self.name, f"HTTP {response.status}")
         try:
-            body = response.body
-            if isinstance(body, (bytes, bytearray)):
-                body = bytes(body).decode("utf-8", errors="replace")
-            payload = json.loads(body)
+            payload = json.loads(response.body)
         except (ValueError, TypeError):
             return _unavailable(self.name, "invalid JSON")
         if not isinstance(payload, list):
@@ -489,22 +307,3 @@ class MerriamWebsterSource:
         if not senses:
             return _no_entry(self.name)
         return senses, SourceOutcome(self.name, "ok", None)
-
-    def query(self, x: str, *args: Any, **kwargs: Any):
-        transport = kwargs.get("transport", args[0] if args else None)
-        senses, outcome = self.fetch(x, transport if transport is not None else self.transport)
-        outcome.senses = senses  # type: ignore[attr-defined]
-        return outcome
-
-    def lookup(self, term: str, transport: Any | None = None):
-        return self.fetch(term, transport if transport is not None else self.transport)
-
-    def lookup_reported(self, term: str):
-        return self.lookup(term, self.transport)
-
-
-# Panel-c base-class alias: structural typing only, behaviour lives above.
-class DictionarySource:
-    """Marker base for panel-c ``isinstance`` checks (no behaviour)."""
-
-    name: str = ""

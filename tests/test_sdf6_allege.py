@@ -9,7 +9,8 @@ import json
 import pytest
 
 from board.machine import NodeFrozen
-from server.errors import NoActiveClaim, UnknownBoard, UnknownNode
+from board.machine import UnknownNode
+from server.errors import NoActiveClaim, UnknownBoard
 from server.model import AllegationResult
 from tests.sdf6_stubs import make_svc
 

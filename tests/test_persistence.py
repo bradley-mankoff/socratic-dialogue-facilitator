@@ -41,7 +41,7 @@ def _scripted_board(store):
     for who in (h1, h2):
         m.cast(q5, who, "explicit", "for")
     m.tiebreak_ballot(ce1, "the example misapplies the definition")
-    qc = m.propose_close(opened_by=h1)
+    qc = m.open_governance_q("close", opened_by=h1)
     for who in (h1, h2):
         m.cast(qc, who, "explicit", "for")
     return m, dict(h1=h1, h2=h2, h3=h3, f1=f1, n1=n1, ce1=ce1, q1=q1)

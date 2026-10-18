@@ -131,3 +131,8 @@ def test_merriam_webster_parses_shortdef_and_miss_yields_no_entry():
     senses, outcome = source.fetch("justice", suggestion)
     assert senses == []
     assert outcome.status == "no_entry"
+
+
+def test_stability_weights_rank_wiktionary_first():
+    from dictionary.sources import stability_for
+    assert stability_for("wiktionary") > stability_for("free-dictionary") > stability_for("merriam-webster")

@@ -11,6 +11,7 @@ ballot — and the whole journal replays byte-identical after a reopen.
 
 import json
 
+import board.verdicts as V
 from board.machine import fold_events
 from server.model import CLAIM_RECORDED, VOTE_EVENT_TYPES
 from tests.sdf5_stubs import empty_chain, make_service
@@ -41,7 +42,7 @@ def test_erring_ruler_refutes_and_unrefutes_through_the_service(tmp_path):
     explicit = service.cast_vote(bid, ref_q, "rebutted",
                                  by_display="Thrasymachus",
                                  reason="Socrates rebutted the example")
-    counted = machine.counted_all(ref_q)
+    counted = V.counted(machine.state, ref_q)
     assert set(counted) == {polemarchus, thrasymachus}, \
         "one counted ballot per person; the alleger has not voted"
     assert counted[thrasymachus].ballot_id == explicit.ballot_id, \
@@ -72,12 +73,12 @@ def test_erring_ruler_refutes_and_unrefutes_through_the_service(tmp_path):
     flipped = service.cast_vote(bid, ref_q, "stands", handle_id=cephalus)
     assert flipped.refuted is True, "2 stands over census 3 refutes"
     assert flipped.replaced_ballot_id is None, "Cephalus had nothing counted"
-    assert machine.node_status(env.node) == "refuted"
+    assert machine.state.nodes[env.node].status == "refuted"
     unflipped = service.cast_vote(bid, ref_q, "rebutted",
                                   handle_id=polemarchus,
                                   reason="on reflection, the example holds")
     assert unflipped.refuted is False
-    assert machine.node_status(env.node) == "unrefuted"
+    assert machine.state.nodes[env.node].status == "unrefuted"
     assert unflipped.replaced_ballot_id == first.ballot_id, \
         "the superseded ballot is Polemarchus' own counted ambient"
     back = service.cast_vote(bid, ref_q, "stands", handle_id=thrasymachus,
@@ -115,7 +116,7 @@ def test_erring_ruler_refutes_and_unrefutes_through_the_service(tmp_path):
     voted2 = service.cast_vote(bid, fresh.q_id, "stands",
                                by_display="Glaucon")
     assert voted2.counted is True
-    assert machine.node_status(revised.node_id) == "unrefuted"
+    assert machine.state.nodes[revised.node_id].status == "unrefuted"
     del first, shadow, voted2, back
 
 

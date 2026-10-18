@@ -40,7 +40,16 @@ from pathlib import Path
 from typing import Callable
 
 import board.verdicts as V
-from board.machine import BoardClosed, VerdictMachine
+from board.machine import (
+    BoardClosed,
+    FacilitatorNeverProposes,
+    NotActiveNode,
+    UnknownCounterexample,
+    UnknownHandle,
+    UnknownNode,
+    UnknownQuestion,
+    VerdictMachine,
+)
 from board.model import MEDIA, MODES, SHAPES, BoardState
 from board.store import JsonlStore
 from dictionary.chain import DictionaryChain, build_default_chain
@@ -49,19 +58,12 @@ from server.errors import (
     BlankClaim,
     ClaimAlreadyActive,
     EmptyCanonicals,
-    FacilitatorHoldsNoSeat,
-    FacilitatorNeverProposes,
     GovernanceAlreadyOpen,
     GovernanceNoOp,
     NoActiveClaim,
     NoCanonicals,
     NotAGovernanceQuestion,
-    NotActiveNode,
     UnknownBoard,
-    UnknownCounterexample,
-    UnknownHandle,
-    UnknownNode,
-    UnknownQuestion,
     UnknownSense,
 )
 from server.model import (
@@ -127,23 +129,10 @@ class BoardService:
         self.journals = JsonlStore(self.root)
         self.registry = BoardRegistry(registry_path(self.root))
         self.canonical_store = CanonicalStore(self.root,
-                                              chain=self._chain_or_get)
+                                              chain=self._chain)
         self.meta = MetaLog(self.root)
         self.system = SystemLog(self.root)
-        # Alias for cross-panel compatibility: panels b/c use
-        # ``system_log`` while panels a/c use ``system``. Both names
-        # reference the same fourth durable home (system.jsonl).
-        self.system_log = self.system
         self._machines: dict[str, VerdictMachine] = {}
-
-    @classmethod
-    def open(cls, home: Path | str = Path("store"),
-             chain: DictionaryChain | None = None,
-             clock: Callable[[], str] | None = None,
-             search_provider: SearchBackend | None = None) -> "BoardService":
-        """Re-open the data home; every board and snapshot comes from disk."""
-        return cls(home, chain=chain, clock=clock,
-                   search_provider=search_provider)
 
     # -- canonical chain (lazy: never built at import/construct) -----------
 
@@ -151,9 +140,6 @@ class BoardService:
         if self.chain is None:
             self.chain = build_default_chain()
         return self.chain
-
-    def _chain_or_get(self) -> DictionaryChain:
-        return self._chain()
 
     # -- boards -------------------------------------------------------------
 
@@ -274,71 +260,34 @@ class BoardService:
 
     # -- roles / seats (SDF-9) ------------------------------------------------
 
+    def _cede(self, board_id: str, method: str, *refs: str) -> dict:
+        machine = self.machine(board_id)
+        raw = getattr(machine, method)(
+            *(self._resolve_existing_handle(machine, ref) for ref in refs))
+        payload = raw["payload"] if "payload" in raw else raw
+        self.sync_registry(board_id)
+        return {"board_id": board_id, **payload}
+
     def offer_defense(self, board_id: str, to_handle: str, *,
                       by: str) -> dict:
-        """The active defender names a successor; nothing moves until
-        accept (AC2). Handle refs resolve by exact id or display, never
-        auto-enroll; the machine re-validates everything.
-
-        Fused a+b: panel a's machine-direct call plus panel b's caller
-        ergonomics — returns ``{"board_id", "from", "to", "node_id"}``
-        (the committed payload) and syncs the registry mirror. The
-        idempotent re-offer returns the original event's payload shape, so
-        callers can read ``offered["to"]`` either way."""
-        self.board(board_id)                      # UnknownBoard
-        machine = self.machine(board_id)
-        raw = machine.offer_defense(
-            self._resolve_existing_handle(machine, to_handle),
-            self._resolve_existing_handle(machine, by))
-        payload = raw["payload"] if "payload" in raw else raw
-        self.sync_registry(board_id)
-        return {"board_id": board_id, **payload}
+        """The active defender names a successor; nothing moves until accept."""
+        return self._cede(board_id, "offer_defense", to_handle, by)
 
     def accept_defense(self, board_id: str, *, by: str) -> dict:
-        """The offered target accepts; the active claim's defense moves.
-
-        Fused a+b: same payload-plus-board_id shape as
-        :meth:`offer_defense`."""
-        self.board(board_id)
-        machine = self.machine(board_id)
-        raw = machine.accept_defense(
-            self._resolve_existing_handle(machine, by))
-        payload = raw["payload"] if "payload" in raw else raw
-        self.sync_registry(board_id)
-        return {"board_id": board_id, **payload}
+        """The offered target accepts; the active claim's defense moves."""
+        return self._cede(board_id, "accept_defense", by)
 
     def decline_defense(self, board_id: str, *, by: str) -> dict:
-        """The offered target declines; pending clears, defense stays.
-
-        Fused from panel c's lifecycle: logs ``defense_cede_declined``.
-        Only the offered ``to`` handle may decline."""
-        self.board(board_id)
-        machine = self.machine(board_id)
-        raw = machine.decline_defense(
-            self._resolve_existing_handle(machine, by))
-        payload = raw["payload"] if "payload" in raw else raw
-        self.sync_registry(board_id)
-        return {"board_id": board_id, **payload}
+        """The offered target declines; pending clears, defense stays."""
+        return self._cede(board_id, "decline_defense", by)
 
     def withdraw_defense(self, board_id: str, *, by: str) -> dict:
-        """The offerer withdraws; pending clears, defense stays.
-
-        Fused from panel c's lifecycle: logs ``defense_cede_withdrawn``.
-        Only the recorded ``from`` handle may withdraw."""
-        self.board(board_id)
-        machine = self.machine(board_id)
-        raw = machine.withdraw_defense(
-            self._resolve_existing_handle(machine, by))
-        payload = raw["payload"] if "payload" in raw else raw
-        self.sync_registry(board_id)
-        return {"board_id": board_id, **payload}
+        """The offerer withdraws; pending clears, defense stays."""
+        return self._cede(board_id, "withdraw_defense", by)
 
     def roles(self, board_id: str) -> dict:
-        """Fused from panel c: pure seat snapshot for headers/pickers."""
-        self.board(board_id)
-        machine = self.machine(board_id)
-        from server.views import roles_view as _roles_view
-        return _roles_view(machine.state)
+        from board.roles import seats_view
+        return dict(seats_view(self.machine(board_id).state))
 
     # -- provenance / ops log -------------------------------------------------
 
@@ -370,36 +319,23 @@ class BoardService:
     # boards (the journal stays terminal).
 
     def search_counterexamples(self, board_id: str, *, triggered_by: str | None = None,
-                               requested_by: str | None = None,
                                query: str | None = None,
                                count: int = 5) -> dict:
-        """Deliberate web counterexample search for this board's X.
-
-        Costs exactly one backend call per trigger (never cached into
-        canonicals, never pre-fired); the labeled result is appended to
-        the meta sidecar as ``search_recorded`` and returned as a plain
-        dict. ``triggered_by`` (alias ``requested_by``, fused from panel a)
-        is stored verbatim as a display string — never enrolled as a
-        handle (enrollment would write journal events, and this is not a
-        room move). Both payload keys are always written so either
-        spelling reads back identically.
-        """
+        """Deliberate web counterexample search for this board's X."""
         record = self.board(board_id)              # UnknownBoard, zero writes
         if self.search_provider is None:
             raise NoSearchProvider(
                 f"no search provider configured for board {board_id}")
-        who = triggered_by if triggered_by is not None else requested_by
-        if who is None:
-            raise ValueError("triggered_by (or requested_by) is required")
-        _display_string(who, "triggered_by")   # validate, verbatim
+        if triggered_by is None:
+            raise ValueError("triggered_by is required")
+        _display_string(triggered_by, "triggered_by")   # validate, verbatim
         result = run_counterexample_search(
             record.x, provider=self.search_provider, query=query,
             limit=count)
         prior = self.meta.read_events(board_id, SEARCH_RECORDED)
         payload = {
             **result.to_dict(),
-            "requested_by": who,
-            "triggered_by": who,
+            "triggered_by": triggered_by,
             "search_id": f"srch{len(prior) + 1}",
         }
         self.meta.append_event(board_id, SEARCH_RECORDED, payload,
@@ -407,7 +343,6 @@ class BoardService:
         return payload
 
     def attach_sep(self, board_id: str, *, triggered_by: str | None = None,
-                   requested_by: str | None = None,
                    url: str | None = None, excerpt: str | None = None,
                    speaker: str | None = None,
                    citation: str = "") -> dict:
@@ -424,10 +359,9 @@ class BoardService:
         strings, never enrolled handles.
         """
         record = self.board(board_id)
-        who = triggered_by if triggered_by is not None else requested_by
-        if who is None:
-            raise ValueError("triggered_by (or requested_by) is required")
-        _display_string(who, "triggered_by")   # validate, verbatim
+        if triggered_by is None:
+            raise ValueError("triggered_by is required")
+        _display_string(triggered_by, "triggered_by")   # validate, verbatim
         given = [name for name, value in (("url", url), ("excerpt", excerpt))
                  if value is not None]
         if len(given) != 1:
@@ -446,8 +380,7 @@ class BoardService:
         prior = self.meta.read_events(board_id, SEP_ADMITTED)
         payload = {
             **entry.to_dict(),
-            "triggered_by": who,
-            "requested_by": who,
+            "triggered_by": triggered_by,
             "sep_id": f"sep{len(prior) + 1}",
         }
         self.meta.append_event(board_id, SEP_ADMITTED, payload,
@@ -486,10 +419,6 @@ class BoardService:
             self.meta.read_events(board_id, SEP_ADMITTED),
         )
 
-    def counterexamples(self, board_id: str) -> dict:
-        """Alias of :meth:`on_demand` for SDF-10 renderers."""
-        return self.on_demand(board_id)
-
     # -- views -----------------------------------------------------------------
 
     def view(self, board_id: str) -> dict:
@@ -526,7 +455,6 @@ class BoardService:
         resolved once or enrolled. No ``sync_registry`` (opening a CE cannot
         move a mirror) and no sidecar write (claim events only).
         """
-        self.board(board_id)
         machine = self.machine(board_id)
         state = machine.state
         if shape not in SHAPES:
@@ -590,7 +518,6 @@ class BoardService:
         ``had_effect=False`` — changing an explicit vote means casting a new
         one. Frozen questions refuse with :class:`QNotOpen`.
         """
-        self.board(board_id)
         machine = self.machine(board_id)
         state = machine.state
         if q_id not in state.questions:
@@ -623,7 +550,6 @@ class BoardService:
         then votes ``for|against`` on ``tiebreak_q_id``; the machine settles
         it on a strict census majority or the 1-human exemption.
         """
-        self.board(board_id)
         machine = self.machine(board_id)
         state = machine.state
         if ce_id not in state.ces:
@@ -650,7 +576,6 @@ class BoardService:
         a tie lands on not-refuted). The ballot counts in the tally but takes
         no census seat in facilitates mode.
         """
-        self.board(board_id)
         machine = self.machine(board_id)
         state = machine.state
         if ce_id not in state.ces:
@@ -685,7 +610,6 @@ class BoardService:
         :class:`NoActiveClaim`; unknown nodes :class:`UnknownNode`.
         JSON-able by construction: ``json.loads(json.dumps(sb)) == sb``.
         """
-        self.board(board_id)
         machine = self.machine(board_id)
         state = machine.state
         target = node_id if node_id is not None else state.active_node_id
@@ -752,7 +676,6 @@ class BoardService:
                      receive_time: float | None = None) -> VoteResult:
         """Shared body of ``cast_vote`` / ``record_ambient_vote": resolve,
         one machine call, shape the result, sync the registry mirrors."""
-        self.board(board_id)
         machine = self.machine(board_id)
         state = machine.state
         if q_id not in state.questions:
@@ -819,49 +742,20 @@ class BoardService:
     # -- governance moves + system log (SDF-8) -----------------------------
 
     def propose_mode_switch(self, board_id: str, to_mode: str | None = None,
-                            opened_by: str | None = None, *,
-                            new_mode: str | None = None,
-                            **kw) -> str:
+                            opened_by: str | None = None) -> str:
         """Open a mode_switch Q (majority decides; mode flips on 'for')."""
-        # Panel-b alias: ``new_mode`` kw. Panel-c positional style also works
-        # since ``to_mode`` is positional-or-keyword with a default.
-        target = to_mode if to_mode is not None else kw.pop(
-            "to_mode", None)
-        if target is None:
-            target = new_mode if new_mode is not None else kw.pop(
-                "new_mode", None)
-        if kw:
-            raise TypeError(f"unexpected kwargs: {sorted(kw)}")
-        return self._open_move(board_id, "mode_switch", target, opened_by)
+        return self._open_move(board_id, "mode_switch", to_mode, opened_by)
 
     def propose_socrates_swap(self, board_id: str, to_handle: str | None = None,
-                              opened_by: str | None = None, *,
-                              handle_id: str | None = None,
-                              **kw) -> str:
+                              opened_by: str | None = None) -> str:
         """Open a socrates_swap Q; the settled mandate is SDF-9's to apply."""
-        target = to_handle if to_handle is not None else kw.pop(
-            "to_handle", None)
-        if target is None:
-            target = handle_id if handle_id is not None else kw.pop(
-                "handle_id", None)
-        if kw:
-            raise TypeError(f"unexpected kwargs: {sorted(kw)}")
-        return self._open_move(board_id, "socrates_swap", target,
+        return self._open_move(board_id, "socrates_swap", to_handle,
                                opened_by)
 
     def propose_active_claim_switch(self, board_id: str, to_node: str | None = None,
-                                    opened_by: str | None = None, *,
-                                    node_id: str | None = None,
-                                    **kw) -> str:
+                                    opened_by: str | None = None) -> str:
         """Open an active_claim_switch Q; this slice never re-activates."""
-        target = to_node if to_node is not None else kw.pop(
-            "to_node", None)
-        if target is None:
-            target = node_id if node_id is not None else kw.pop(
-                "node_id", None)
-        if kw:
-            raise TypeError(f"unexpected kwargs: {sorted(kw)}")
-        return self._open_move(board_id, "active_claim_switch", target,
+        return self._open_move(board_id, "active_claim_switch", to_node,
                                opened_by)
 
     def propose_ingress_selection(self, board_id: str, candidate: str,
@@ -963,7 +857,7 @@ class BoardService:
             "subject": q.subject,
             "status": q.status,
             "outcome": q.outcome,
-            "tally": dict(V.gov_tally(state, q_id)),
+            "tally": dict(V.tally(state, q_id)),
             "census_size": len(V.census(state, q_id)),
         }
 
@@ -988,7 +882,6 @@ class BoardService:
         callers (unicast slots, no-op moves, subject existence) and appends
         the ``governance_opened`` system entry only after the Q exists.
         """
-        self.board(board_id)                     # UnknownBoard
         machine = self.machine(board_id)
         state = machine.state
         if state.status == "closed":            # terminality outranks validation
@@ -1073,7 +966,7 @@ class BoardService:
             "kind": q.kind,
             "subject": q.subject,
             "outcome": q.outcome,
-            "tally": dict(V.gov_tally(state, q.q_id)),
+            "tally": dict(V.tally(state, q.q_id)),
             "census_size": len(V.census(state, q.q_id)),
             "settled_seq": q.settled_seq,
             "opened_seq": q.opened_seq,
@@ -1221,14 +1114,8 @@ class BoardService:
 
         pending = self._pending_refutations(state, prev)
         node_id = self._next_node_id(state)
-        claimed_by = self._ensure_handle(machine, claimant_display)
-        if (claimed_by is not None
-                and machine.state.handles[claimed_by].is_facilitator
-                and machine.state.mode != "participates"):
-            raise FacilitatorHoldsNoSeat(
-                "the facilitator cannot hold the defense outside "
-                "participates mode")             # G2
-
+        claimed_by = self._resolve_handle(machine, None, claimant_display,
+                                          required=False)
         machine.register_node(node_id, text, defender=claimed_by)  # canvas
 
         # Nothing past this point may raise: a failure between the journal
@@ -1362,21 +1249,6 @@ class BoardService:
             k += 1
         return f"n{k}"
 
-    @staticmethod
-    def _ensure_handle(machine: VerdictMachine, display: str) -> str | None:
-        """Route a display name to a handle, enrolling it once.
-
-        Exact-display lookup first: ``enroll_handle`` suffixes a duplicate
-        (``Thrasymachus`` → ``Thrasymachus (2)``), which would silently split
-        one claimant into two identities.
-        """
-        if display is None or (isinstance(display, str) and not display.strip()):
-            return None
-        state = machine.state
-        for handle_id, handle in state.handles.items():
-            if handle.display == display:
-                return handle_id
-        return machine.enroll_handle(str(display), kind="enrolled")
 
 
 __all__ = ["BoardService"]

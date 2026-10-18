@@ -16,11 +16,11 @@ import pytest
 
 from board.machine import (
     FacilitatorHoldsNoSeat,
-    InvalidGovernanceSubject,
     NoPendingCede,
     NotCedeTarget,
     NotDefender,
     UnknownHandle,
+    UnknownNode,
 )
 from tests.sdf9_stubs import CLAIM, open_justice, reload_state, settle_side
 
@@ -59,13 +59,11 @@ def test_fused_nameless_hybrid_satisfies_both_panels(sdf5_svc):
     # The fused hybrid is all three at once.
     env = open_justice(sdf5_svc)
     m = env.machine
-    with pytest.raises(ValueError):
-        m.open_governance_q("socrates_swap", subject=None)
     with pytest.raises(UnknownHandle):
         m.open_governance_q("socrates_swap", subject=None)
-    with pytest.raises(InvalidGovernanceSubject):
+    with pytest.raises(UnknownHandle):
         m.open_governance_q("socrates_swap", subject="")
-    with pytest.raises(ValueError):
+    with pytest.raises(UnknownNode):
         m.open_governance_q("active_claim_switch", subject="")
     # non-blank unknown still raises the plain errors, no auto-enroll
     before = len(m.state.handles)
@@ -134,7 +132,6 @@ def test_fused_decline_withdraw_clear_without_moving(sdf5_svc):
 
 def test_fused_roles_view_matches_machine(sdf5_svc):
     # Panel c UI intent on the a/b schema: the view cannot disagree.
-    from server.views import roles_view
     from board.roles import seats_view
 
     env = _claimed(sdf5_svc)
@@ -144,10 +141,10 @@ def test_fused_roles_view_matches_machine(sdf5_svc):
     assert snap["socrates"] == h["Cephalus"]
     assert snap["defense"] == h["Thrasymachus"]
     assert snap["pending_cede"] is None
-    assert roles_view(m.state) == snap
+    assert seats_view(m.state) == snap
     m.offer_defense(h["Polemarchus"], by=h["Thrasymachus"])
-    assert roles_view(m.state)["pending_cede"]["to"] == h["Polemarchus"]
-    assert roles_view(m.state)["defense"] == h["Thrasymachus"]  # unchanged
+    assert seats_view(m.state)["pending_cede"]["to"] == h["Polemarchus"]
+    assert seats_view(m.state)["defense"] == h["Thrasymachus"]  # unchanged
     # board_view carries the roles block (panel c) and stays JSON-able
     view = env.service.view(env.board_id)
     assert view["roles"]["socrates"] == h["Cephalus"]
