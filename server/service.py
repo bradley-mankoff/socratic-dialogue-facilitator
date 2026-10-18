@@ -94,6 +94,8 @@ from server.store import (
     DEFAULT_ROOT,
     GOVERNANCE_OPENED,
     GOVERNANCE_SETTLED,
+    TRAY_DISCARDED,
+    TRAY_PRESSED,
     BoardRegistry,
     CanonicalStore,
     MetaLog,
@@ -311,6 +313,111 @@ class BoardService:
     def provenance(self, board_id: str, node_id: str) -> dict | None:
         return self.provenance_map(board_id).get(node_id)
 
+    # -- carry tray (SDF-7) ----------------------------------------------------
+    # The tray is a read projection, never verdict state: revisions already
+    # fold standing CEs into the ``carried_unvoted`` sidecar rows and freeze
+    # the superseded node's questions, so this section only surfaces those
+    # rows, retires them on press/discard, and never touches the journal
+    # except for the one new Q a press opens on the active node. Tray items
+    # stay off verdicts and the canvas live path by construction: nothing
+    # here writes a ballot, a tally, a node or an edge.
+
+    def tray(self, board_id: str) -> dict:
+        """Visible carry: unresolved CEs from superseded nodes."""
+        self.board(board_id)
+        state = self.machine(board_id).state
+        return {
+            "board_id": board_id,
+            "tray": TRAY_NAME,
+            "active_node_id": state.active_node_id,
+            "items": self._tray_items(board_id),
+        }
+
+    def _tray_items(self, board_id: str) -> list[dict]:
+        """Carried rows minus pressed/discarded ones, in carried order."""
+        carried: dict[str, dict] = {}
+        for event in self.meta.read_events(board_id, CLAIM_REVISED):
+            for row in event["payload"].get("unresolved_ces", []):
+                if row.get("carried"):
+                    carried[row["ce_id"]] = {
+                        **{k: row.get(k) for k in (
+                            "ce_id", "q_id", "node_id", "shape",
+                            "q_status", "outcome", "stands",
+                            "rebutted", "census_size")},
+                        "status": TRAY_NAME,
+                    }
+        resolved = set()
+        for event in self.system.read_events(board_id):
+            if event["type"] in (TRAY_PRESSED, TRAY_DISCARDED):
+                resolved.add(event["payload"].get("ce_id"))
+        return [item for ce_id, item in carried.items()
+                if ce_id not in resolved]
+
+    def _tray_item(self, board_id: str, ce_id: str) -> dict:
+        """One live tray item, or refuse (unknown vs. resolved)."""
+        state = self.machine(board_id).state
+        if ce_id not in state.ces:
+            raise UnknownCounterexample(f"unknown ce: {ce_id}")
+        for item in self._tray_items(board_id):
+            if item["ce_id"] == ce_id:
+                return item
+        raise ValueError(
+            f"ce {ce_id!r} is not on the carry tray "
+            f"(never carried, already pressed, or already discarded)")
+
+    def press_tray_item(self, board_id: str, ce_id: str, *,
+                        by_display: str | None = None,
+                        handle_id: str | None = None) -> AllegationResult:
+        """Re-open an unvoted tray item as a new Q on the active node.
+
+        Same shape, fresh CE + fresh refutation Q via the machine (so the
+        new ballot is ordinary verdict state); the old item retires through
+        a ``tray_pressed`` system entry. Validation precedes every write:
+        a refusal leaves journal and log untouched.
+        """
+        machine = self.machine(board_id)
+        state = machine.state
+        if state.status == "closed":
+            raise BoardClosed(f"board {board_id} is closed")
+        item = self._tray_item(board_id, ce_id)
+        target = state.active_node_id
+        if target is None:
+            raise NoActiveClaim(
+                f"board {board_id} has no active claim to press onto")
+        handle = self._resolve_handle(machine, handle_id, by_display,
+                                      required=False)
+        new_ce, new_q = machine.open_refutation_q(
+            target, item["shape"], opened_by=handle)
+        self.system.append_event(
+            board_id, TRAY_PRESSED,
+            {"ce_id": ce_id, "from_node_id": item["node_id"],
+             "new_ce_id": new_ce, "new_q_id": new_q,
+             "node_id": target, "shape": item["shape"],
+             "origin": "system"},
+            ts=self._clock())
+        return AllegationResult(
+            board_id=board_id, node_id=target, ce_id=new_ce, q_id=new_q,
+            shape=item["shape"], opened_by=handle,
+            opened_seq=machine.state.questions[new_q].opened_seq,
+        )
+
+    def discard_tray_item(self, board_id: str, ce_id: str) -> dict:
+        """Drop an unvoted tray item: a system-log entry, nothing else.
+
+        Log-only by design (SDF-16 precedent), so it also lands on a closed
+        board; the journal, the meta sidecar and every verdict stand as
+        they were.
+        """
+        self.board(board_id)
+        item = self._tray_item(board_id, ce_id)
+        self.system.append_event(
+            board_id, TRAY_DISCARDED,
+            {"ce_id": ce_id, "node_id": item["node_id"],
+             "shape": item["shape"], "origin": "system"},
+            ts=self._clock())
+        return {"board_id": board_id, "ce_id": ce_id,
+                "node_id": item["node_id"], "discarded": True}
+
     # -- on-demand search + SEP admission (SDF-16) ---------------------------
     # Explicit triggers only. Nothing in open_board, claim, revise, vote,
     # tally, view or log paths calls these methods or anything they call.
@@ -433,7 +540,8 @@ class BoardService:
         return board_view(
             record, machine.state, self.provenance_map(board_id), snapshot,
             shared_cache=len(self.registry.boards_for(record.x_norm)) > 1,
-            on_demand_events=self.meta.read_events(board_id))
+            on_demand_events=self.meta.read_events(board_id),
+            tray_items=self._tray_items(board_id))
 
     def boards_list(self, x: str | None = None) -> list[dict]:
         return boards_view(self.list_boards(x))

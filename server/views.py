@@ -23,7 +23,7 @@ from search.model import (
     ON_DEMAND_SECTION_LABEL,
 )
 from search.service import render_on_demand
-from server.model import SEARCH_RECORDED, SEP_ADMITTED
+from server.model import SEARCH_RECORDED, SEP_ADMITTED, TRAY_NAME
 
 NOT_PULLED = "not_pulled"
 
@@ -117,10 +117,27 @@ def on_demand_view(events: list[dict]) -> dict[str, Any]:
     return section
 
 
+def tray_view(items: list[dict] | None,
+              active_node_id: str | None) -> dict[str, Any]:
+    """The visible carry tray (SDF-7): unvoted items off the live path.
+
+    Pure projection of already-persisted rows — verdicts never read it, so
+    rendering it can never move a tally. Item dicts carry no ``origin``
+    key and no system type string, keeping the SDF-8 facilitator-blind
+    separation intact. JSON-able by construction.
+    """
+    return {
+        "tray": TRAY_NAME,
+        "active_node_id": active_node_id,
+        "items": [dict(item) for item in (items or [])],
+    }
+
+
 def board_view(record, state: BoardState, provenance_map: dict[str, dict],
                snapshot: dict | None, *,
                shared_cache: bool = False,
-               on_demand_events: list[dict] | None = None) -> dict[str, Any]:
+               on_demand_events: list[dict] | None = None,
+               tray_items: list[dict] | None = None) -> dict[str, Any]:
     """Whole-board view: header, handles, lineage (v1→vN), questions, defs.
 
     ``mode``/``medium``/``status`` are read from the live machine state, not
@@ -155,6 +172,7 @@ def board_view(record, state: BoardState, provenance_map: dict[str, dict],
         # voices, both canonical False.
         "on_demand": on_demand,
         "counterexamples": on_demand,
+        "tray": tray_view(tray_items, state.active_node_id),
         "cache": {"shared": bool(shared_cache), "source": "registry"},
     }
 

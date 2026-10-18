@@ -52,7 +52,13 @@ ALLOWED_MIRROR_FIELDS = ("mode", "medium", "status")
 # SDF-8 system-log event types (the only shapes ``SystemLog`` accepts).
 GOVERNANCE_OPENED = "governance_opened"
 GOVERNANCE_SETTLED = "governance_settled"
-SYSTEM_EVENT_TYPES: tuple[str, ...] = (GOVERNANCE_OPENED, GOVERNANCE_SETTLED)
+# SDF-7 carry-tray resolutions: a press re-opens the item as a new Q (the
+# journal Q is the verdict record; this entry only retires the tray item)
+# and a discard is log-only. Payloads carry ids, never voice.
+TRAY_PRESSED = "tray_pressed"
+TRAY_DISCARDED = "tray_discarded"
+SYSTEM_EVENT_TYPES: tuple[str, ...] = (GOVERNANCE_OPENED, GOVERNANCE_SETTLED,
+                                       TRAY_PRESSED, TRAY_DISCARDED)
 
 
 def registry_path(root: Path | str = DEFAULT_ROOT) -> Path:
@@ -360,7 +366,8 @@ class MetaLog(_EventLog):
 
 
 class SystemLog(_EventLog):
-    """Append-only facilitator-blind system log of governance events (SDF-8).
+    """Append-only facilitator-blind system log of governance events (SDF-8)
+    plus carry-tray resolutions (SDF-7).
 
     A fourth durable home beside ``journal.jsonl`` and ``meta.jsonl``: same
     durability (fsync per append, torn-tail repair, ``read_all``) under its
@@ -380,7 +387,8 @@ class SystemLog(_EventLog):
 __all__ = [
     "REGISTRY_FILENAME", "REGISTRY_VERSION", "DEFAULT_ROOT",
     "CANONICALS_DIRNAME", "ALLOWED_MIRROR_FIELDS",
-    "GOVERNANCE_OPENED", "GOVERNANCE_SETTLED", "SYSTEM_EVENT_TYPES",
+    "GOVERNANCE_OPENED", "GOVERNANCE_SETTLED", "TRAY_PRESSED",
+    "TRAY_DISCARDED", "SYSTEM_EVENT_TYPES",
     "registry_path", "canonicals_dir", "canonical_path", "creation_key",
     "BoardRegistry", "CanonicalStore", "MetaLog", "SystemLog",
 ]
