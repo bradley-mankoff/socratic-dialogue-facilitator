@@ -438,6 +438,80 @@ class BoardService:
     def boards_list(self, x: str | None = None) -> list[dict]:
         return boards_view(self.list_boards(x))
 
+    # -- share + resume (SDF-18: stories 41, 42) ---------------------------
+    # Share URLs are computed, never stored: identity stays (X, label) in
+    # the registry, so rotating the URL can never rename a board. Resume
+    # replays the journal from disk (kill/crash-safe), heals the system
+    # log, drops ephemeral live mics, keeps durable centroids, and hands
+    # guests the current URL to rejoin on.
+
+    def share_quick_tunnel(self, board_id: str, port: int) -> dict:
+        """One-command share: the Quick Tunnel command plus its report.
+
+        Read-only: verifies the board exists, then returns ``{board_id,
+        command, kind, stable, note}`` without touching registry, journal,
+        or sidecars. The tunnel prints the real rotating
+        ``*.trycloudflare.com`` URL at run time; re-print/re-QR each
+        session — so there is no stored URL to go stale."""
+        from server.share import quick_tunnel_command, share_info
+        self.board(board_id)
+        command = quick_tunnel_command(port)
+        # The live URL is printed by the tunnel at run time (it rotates),
+        # so the report describes the kind — never a stored URL.
+        info = share_info("https://tunnel.trycloudflare.com")
+        return {
+            "board_id": board_id,
+            "command": command,
+            "kind": info["kind"],
+            "stable": info["stable"],
+            "note": info["note"],
+        }
+
+    def share_lan(self, board_id: str, host: str, port: int) -> dict:
+        """QR LAN fallback: a joinable local URL with zero third parties.
+
+        Read-only like :meth:`share_quick_tunnel`. ``qr_payload`` is what
+        the QR encodes (the URL verbatim); v1 ships no QR dependency, so
+        any QR printer turns it into a joinable code."""
+        from server.share import lan_url, qr_payload, share_info
+        self.board(board_id)
+        url = lan_url(host, port)
+        info = share_info(url)
+        info["qr_payload"] = qr_payload(url)
+        return {"board_id": board_id, **info}
+
+    def resume_board(self, board_id: str, *, current_url: str,
+                     live_mics=None, enrollment_store=None) -> dict:
+        """Sleep/crash resume: decided state reloaded, mics dropped.
+
+        Forces a from-disk replay (drops the cached machine so the journal
+        is re-folded exactly as a fresh process would), heals the system
+        log, drops this board's ephemeral live mics, counts (never
+        touches) durable enrollment centroids, and reports the current URL
+        for guests to rejoin on. Returns ``{board_id, x, label, seq,
+        rejoin_url, dropped_live_mics, kept_centroids}``."""
+        from server.share import rejoin_url as _rejoin
+        record = self.board(board_id)
+        if (not isinstance(current_url, str) or not current_url.strip()):
+            raise ValueError(
+                "resume needs the current non-blank share URL")
+        self._machines.pop(board_id, None)  # force journal replay from disk
+        state = self.machine(board_id).state
+        self._heal_log(board_id)
+        dropped = (live_mics.drop_board(board_id)
+                   if live_mics is not None else 0)
+        kept = (list(enrollment_store.handles(board_id))
+                if enrollment_store is not None else [])
+        return {
+            "board_id": board_id,
+            "x": record.x,
+            "label": record.label,
+            "seq": state.seq,
+            "rejoin_url": _rejoin(current_url),
+            "dropped_live_mics": dropped,
+            "kept_centroids": kept,
+        }
+
     # -- scrutiny API (SDF-6): allege CEs, ingest votes, render scores ------
 
     def allege(self, board_id: str, shape: str, *, node_id: str | None = None,
