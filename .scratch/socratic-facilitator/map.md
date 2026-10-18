@@ -7,7 +7,7 @@ Buildable spec for a self-hosted (this Mac on-only) Socratic dialogue facilitato
 - Domain: Target (X), Board (canonical + claimed defs), Active definition (single def under elenchus), Counterexample shapes (3a IS-X-but-fails-def / 3b fits-def-but-is-NOT-X), Iteration chain, Canvas (post-dialogue 2-D summary, interactive + static export).
 - Skills every session consults: `/grilling` + `/domain-modeling` for grilling tickets; `/research` subagents for research tickets; `/prototype` for canvas/board fidelity questions; `/ask-matt` to route when unsure.
 - Standing preferences: self-host free while this Mac is on; multi-party URL ideally; live = real-time voice transcription + search layer; async = persistent board over days; facilitator never speaks verbally in live mode; auto-populate canonicals, counterexamples on demand only; highly-cited informal defs (no Plato corpus rebuild, no famous-philosopher privileging); Justice/Rep I as test fixture; open-source canvas libs over inventing pan/zoom.
-- Tracker: wayfinder map lives local-markdown (`.scratch/socratic-facilitator/`). Factory migrated to Piyaz project **SDF** (2026-09-11); implementation tickets publish there.
+- Tracker: wayfinder map lives local-markdown (`.scratch/socratic-facilitator/`). Since 2026-10-18 the work is tracked in Beads by the Factory; the spec and the earlier factory's tickets are copied in `docs/plan/`.
 
 ## Decisions so far
 
@@ -15,7 +15,6 @@ Buildable spec for a self-hosted (this Mac on-only) Socratic dialogue facilitato
 - [Free self-host URL while this Mac is on](issues/01-host-substrate.md) — default Cloudflare Quick Tunnel ($0, no account), fallback LAN + QR
 - [Canvas shape without inventing pan/zoom](issues/04-canvas-shape.md) — adopt Cytoscape.js (MIT, first-party PNG export + JSON round-trip)
 - [Live transcription + definition-search pipeline](issues/05-live-pipeline.md) — faster-whisper local int8 + Wiktionary-first chain with cite/dedup policy
-- [Migrate factory to Piyaz](issues/06-piyaz-migration.md) — project SDF live, factory.json tracker=piyaz, dry-run passes
 - [Board semantics for single toggleable board](issues/02-board-semantics.md) — TWO modes (LLM Participates / LLM Facilitates), Socrates as role; universal-franchise majority; ambient tally; revision-by-new-node (amended 09-13)
 - [Speaker enrollment and voiceprint calibration](issues/07-speaker-enrollment.md) — wespeaker resnet34-LM centroids (~30s calibration), tunnel-HTTPS mic for guests, SPEAKER_XX fallback
 - [Facilitator manners](issues/03-facilitator-manners.md) — full-participant-minus-Socrates; staleness quotes + self-cut; tally plumbing both modes; no digests/nudges
