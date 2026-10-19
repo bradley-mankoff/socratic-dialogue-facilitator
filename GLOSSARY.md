@@ -7,7 +7,9 @@ Project words. They mean what the v1 spec (docs/plan/2026-09-13-spec-v3.md, Epic
 - **Active definition**: the single definition under elenchus, front-center; counterexamples attach to it.
 - **Counterexample shapes 3a / 3b**: 3a is IS-X-but-fails-the-definition; 3b fits-the-definition-but-is-NOT-X.
 - **Iteration chain**: revision history as new version nodes, never edits; superseded nodes freeze with tallies intact.
-- **Canvas**: closing 2-D summary — attempt nodes, labeled refutation edges, highlighted active chain; PNG-only export.
+- **Canvas**: closing summary that walks the debate as a story — who offered each definition, who raised each challenge, how that lands on the map. Attempts as nodes, refutations as labeled edges, active chain highlighted. PNG-only export. Its graph allows cycles: a rejected counterexample returns the room to the earlier attempt it struck.
+- **Attempt**: plain user-facing word for one definition node on the canvas (Attempt 1, Attempt 2, the live one marked active). Machine ids never show on screen.
+- **Set aside**: plain user-facing word for the tray box on the canvas, carrying earlier counterexamples forward with a caption saying each can be reopened on the active attempt or dropped.
 - **Handle**: unique board-local identity string. Voiceprint enrollment, provisional labels, and async names all bind to handles.
 - **Census**: for a question Q, BoardCensus(Q.openedAt) plus handles that subsequently cast on Q.
 - **Q**: every majority question — counterexamples, mode switches, Socrates swaps, active-claim switches, ingress selection, tiebreak invocations, board close.
