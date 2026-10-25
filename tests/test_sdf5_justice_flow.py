@@ -29,9 +29,9 @@ def test_justice_board_end_to_end(tmp_path):
     service = make_service(tmp_path / "store", chain=chain)
     stub = chain.transport
 
-    # 1. open the board: X, label, mode, canonical definitions
+    # 1. open the board: X, label, medium, canonical definitions
     opened = service.open_board("Justice (Republic Book I)", "socrates-room",
-                                mode="participates", medium="async")
+                                medium="async")
     bid = opened.board_id
     assert opened.created is True
     assert opened.record.x_title == "Justice (Republic Book I)"
@@ -95,8 +95,7 @@ def test_justice_board_end_to_end(tmp_path):
     assert len(stub.calls) == 2, "the whole dialogue cost one canonical pull"
 
     # 7. a second room on the same X: new label, shared cache, clean slate
-    other = service.open_board("Justice (Republic Book I)", "thrasy-room",
-                              mode="facilitates")
+    other = service.open_board("Justice (Republic Book I)", "thrasy-room")
     assert other.board_id != bid
     assert service.canonicals(other.board_id) == service.canonicals(bid)
     assert service.state(other.board_id).nodes == {}

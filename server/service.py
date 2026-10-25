@@ -1,10 +1,10 @@
 """BoardService — SDF-5 board operations end to end + SDF-6 scrutiny.
 
-The public API: open a board on ``(X, label)``, pick its mode, pull/serve
+The public API: open a board on ``(X, label)``, pull/serve
 canonical definitions, claim one (source-tagged) or author an original,
 revise the active claim into a new version node — then allege labeled
 counterexamples, ingest explicit/ambient ballots, retract ambient ones,
-run tiebreak-invoke governance, and read the live scoreboard.
+and read the live scoreboard.
 
 Division of authority (downstream SDF-7/10/14/18 depend on this):
 
@@ -12,10 +12,9 @@ Division of authority (downstream SDF-7/10/14/18 depend on this):
   per-board ``journal.jsonl``. This module is the *only* caller of
   ``register_node`` in the slice and never writes a verdict event itself;
   the SDF-6 scrutiny methods stay thin: resolve → one machine mutator →
-  shape the result → ``sync_registry`` on the four verdict-affecting paths
-  (``cast_vote``, ``record_ambient_vote``, ``retract_vote``,
-  ``cast_tiebreak_ballot``) and never on reads or on ``allege``/
-  ``invoke_tiebreak`` (they cannot move a mirror).
+  shape the result → ``sync_registry`` on the three verdict-affecting paths
+  (``cast_vote``, ``record_ambient_vote``, ``retract_vote``)
+  and never on reads or on ``allege`` (it cannot move a mirror).
 * **Provenance and the revision (tray) event** live in the ``meta.jsonl``
   sidecar (:class:`server.store.MetaLog`). The machine never reads it and
   this module never appends to the journal — ``board.machine._apply`` raises
@@ -42,7 +41,6 @@ from typing import Callable
 import board.verdicts as V
 from board.machine import (
     BoardClosed,
-    FacilitatorNeverProposes,
     NotActiveNode,
     UnknownCounterexample,
     UnknownHandle,
@@ -50,7 +48,7 @@ from board.machine import (
     UnknownQuestion,
     VerdictMachine,
 )
-from board.model import MEDIA, MODES, SHAPES, BoardState
+from board.model import MEDIA, SHAPES, BoardState
 from board.store import JsonlStore
 from dictionary.chain import DictionaryChain, build_default_chain
 from dictionary.normalize import normalize_x
@@ -59,7 +57,6 @@ from server.errors import (
     ClaimAlreadyActive,
     EmptyCanonicals,
     GovernanceAlreadyOpen,
-    GovernanceNoOp,
     NoActiveClaim,
     NoCanonicals,
     NotAGovernanceQuestion,
@@ -77,7 +74,6 @@ from server.model import (
     BoardRecord,
     ClaimResult,
     OpenResult,
-    TiebreakResult,
     VoteResult,
     canonical_provenance,
     now_iso,
@@ -105,11 +101,8 @@ from server.store import (
 )
 from server.views import board_view, boards_view, scoreboard_view
 
-# The five room moves this slice governs. ``tiebreak`` is excluded: it is the
-# SDF-2 CE-dispute protocol invocation, not a room move (SDF-8 logs it only
-# as a journal fact, never as a governance mandate).
-GOVERNANCE_MOVE_KINDS = ("close", "mode_switch", "socrates_swap",
-                         "active_claim_switch", "ingress_selection")
+# The two room moves this slice governs.
+GOVERNANCE_MOVE_KINDS = ("close", "ingress_selection")
 
 
 class BoardService:
@@ -146,15 +139,13 @@ class BoardService:
     # -- boards -------------------------------------------------------------
 
     def open_board(self, x: str, label: str | None = None, *,
-                   mode: str = "participates", medium: str = "async",
+                   medium: str = "async",
                    pull_canonicals: bool = True) -> OpenResult:
         """Get-or-create the board keyed by ``(normalize_x(X), label)``.
 
         Validation and the canonical pull happen *before* any write, so a bad
         argument or a dead dictionary leaves no half-open board.
         """
-        if mode not in MODES:
-            raise ValueError(f"mode must be one of {MODES}")
         if medium not in MEDIA:
             raise ValueError(f"medium must be one of {MEDIA}")
         if not x or not isinstance(x, str) or not normalize_x(x):
@@ -168,7 +159,7 @@ class BoardService:
             label = self.registry.next_label(xn)
         else:
             existing = self.registry.get(xn, label)
-            if existing is not None:      # GET path: mode/medium are ignored
+            if existing is not None:      # GET path: medium is ignored
                 return OpenResult(
                     record=existing, created=False,
                     view=self.view(existing.board_id))
@@ -178,9 +169,9 @@ class BoardService:
             self.canonical_store.get(xn)
 
         record = self.registry.reserve(x=x, x_title=str(x).strip(),
-                                       label=label, mode=mode, medium=medium)
+                                       label=label, medium=medium)
         machine = VerdictMachine(self.journals, record.board_id)
-        machine.create_board(record.board_id, str(x).strip(), mode, medium)
+        machine.create_board(record.board_id, str(x).strip(), medium)
         self._machines[record.board_id] = machine
         return OpenResult(record=record, created=True,
                           view=self.view(record.board_id))
@@ -216,11 +207,11 @@ class BoardService:
     def sync_registry(self, board_id: str) -> BoardRecord:
         """Refresh the registry mirrors from live machine state.
 
-        Call after mode/medium/close effects (the SDF-6/8 contract). Never on
+        Call after medium/close effects (the SDF-6/8 contract). Never on
         a read path — :meth:`view` reads the machine directly.
         """
         state = self.machine(board_id).state
-        return self.registry.mark(board_id, mode=state.mode,
+        return self.registry.mark(board_id,
                                   medium=state.medium, status=state.status)
 
     # -- canonicals ---------------------------------------------------------
@@ -259,37 +250,6 @@ class BoardService:
                                     claimant_display=claimant_display,
                                     in_response_to=in_response_to,
                                     revision=True)
-
-    # -- roles / seats (SDF-9) ------------------------------------------------
-
-    def _cede(self, board_id: str, method: str, *refs: str) -> dict:
-        machine = self.machine(board_id)
-        raw = getattr(machine, method)(
-            *(self._resolve_existing_handle(machine, ref) for ref in refs))
-        payload = raw["payload"] if "payload" in raw else raw
-        self.sync_registry(board_id)
-        return {"board_id": board_id, **payload}
-
-    def offer_defense(self, board_id: str, to_handle: str, *,
-                      by: str) -> dict:
-        """The active defender names a successor; nothing moves until accept."""
-        return self._cede(board_id, "offer_defense", to_handle, by)
-
-    def accept_defense(self, board_id: str, *, by: str) -> dict:
-        """The offered target accepts; the active claim's defense moves."""
-        return self._cede(board_id, "accept_defense", by)
-
-    def decline_defense(self, board_id: str, *, by: str) -> dict:
-        """The offered target declines; pending clears, defense stays."""
-        return self._cede(board_id, "decline_defense", by)
-
-    def withdraw_defense(self, board_id: str, *, by: str) -> dict:
-        """The offerer withdraws; pending clears, defense stays."""
-        return self._cede(board_id, "withdraw_defense", by)
-
-    def roles(self, board_id: str) -> dict:
-        from board.roles import seats_view
-        return dict(seats_view(self.machine(board_id).state))
 
     # -- provenance / ops log -------------------------------------------------
 
@@ -721,59 +681,10 @@ class BoardService:
             "had_effect": withdrawn is not None,
         }
 
-    def invoke_tiebreak(self, board_id: str, ce_id: str, *,
-                        by_display: str | None = None,
-                        handle_id: str | None = None) -> TiebreakResult:
-        """Open the tiebreak governance Q for one CE (story 20).
-
-        Machine-enforced: facilitates mode only (plain :class:`VerdictError`
-        otherwise), the CE must exist (:class:`UnknownCounterexample`), and
-        one invocation per CE, ever (:class:`DuplicateTiebreak`). The room
-        then votes ``for|against`` on ``tiebreak_q_id``; the machine settles
-        it on a strict census majority or the 1-human exemption.
-        """
-        machine = self.machine(board_id)
-        state = machine.state
-        if ce_id not in state.ces:
-            raise UnknownCounterexample(f"unknown ce: {ce_id}")
-        handle = self._resolve_handle(machine, handle_id, by_display,
-                                      required=False)
-        q_id = machine.open_governance_q("tiebreak", subject=ce_id,
-                                         opened_by=handle)
-        return TiebreakResult(
-            board_id=board_id, ce_id=ce_id, tiebreak_q_id=q_id,
-            opened_by=handle,
-            opened_seq=machine.state.questions[q_id].opened_seq,
-        )
-
-    def cast_tiebreak_ballot(self, board_id: str, ce_id: str,
-                             reason: str) -> VoteResult:
-        """The one labeled, reasoned facilitator ballot on the CE's
-        refutation question (story 20).
-
-        Only after that CE's tiebreak Q settled ``for``
-        (:class:`TiebreakNotPassed`); exactly one, ever
-        (:class:`DuplicateTiebreak`); no ``side`` parameter — the machine
-        fixes ``rebutted`` (a lost vote cannot be bypassed into a refutation;
-        a tie lands on not-refuted). The ballot counts in the tally but takes
-        no census seat in facilitates mode.
-        """
-        machine = self.machine(board_id)
-        state = machine.state
-        if ce_id not in state.ces:
-            raise UnknownCounterexample(f"unknown ce: {ce_id}")
-        ballot_id = machine.tiebreak_ballot(ce_id, reason)
-        node_id = state.ces[ce_id].node_id
-        result = self._vote_result(machine, ballot_id,
-                                   state.ballots[ballot_id].q_id)
-        self.sync_registry(board_id)
-        self._after_settlement(board_id, state.ballots[ballot_id].q_id)
-        return result
-
     def vote_events(self, board_id: str, since_seq: int = 0) -> list[dict]:
         """Journal-sourced vote feed for SDF-14 (story 21).
 
-        Every ``ballot_cast`` / ``retraction`` / ``tiebreak_ballot_cast``
+        Every ``ballot_cast`` / ``retraction``
         event after ``since_seq``, ascending. Pure read off
         ``journal.jsonl`` — never copied into the claim-only ``meta.jsonl``
         and never a new journal type. Journal seq and ``meta.jsonl`` seq are
@@ -812,7 +723,7 @@ class BoardService:
 
         Known displays resolve to their existing handle so one claimant is
         never split into two identities; unknown displays enroll once. With
-        ``required=False`` (alleger / tiebreak invoker) a blank or absent
+        ``required=False`` (alleger) a blank or absent
         display is anonymous ``None``; with ``required=True`` (voters) it is
         a :class:`ValueError`.
         """
@@ -834,23 +745,6 @@ class BoardService:
             if handle.display == by_display:
                 return hid
         return machine.enroll_handle(str(by_display), kind="enrolled")
-
-    @staticmethod
-    def _resolve_existing_handle(machine: VerdictMachine, ref: str) -> str:
-        """Exact handle-id or exact-display lookup; never auto-enroll.
-
-        SDF-9 cede paths name existing players only (a typo must refuse, not
-        silently mint an identity): :class:`UnknownHandle` on any miss.
-        """
-        state = machine.state
-        if not isinstance(ref, str) or not ref.strip():
-            raise ValueError("handle id or display required")
-        if ref in state.handles:
-            return ref
-        for handle_id, handle in state.handles.items():
-            if handle.display == ref:
-                return handle_id
-        raise UnknownHandle(f"unknown handle: {ref}")
 
     def _ingest_vote(self, board_id: str, q_id: str, channel: str,
                      side: str, *, by_display: str | None = None,
@@ -886,7 +780,7 @@ class BoardService:
         ballot = state.ballots[ballot_id]
         question = state.questions[q_id]
         subject = question.subject
-        if question.kind in ("refutation", "tiebreak") \
+        if question.kind == "refutation" \
                 and subject in state.ces:
             ce_id: str | None = subject
             node_id: str = state.ces[subject].node_id
@@ -922,23 +816,6 @@ class BoardService:
                      if node_id and node_id in state.nodes else False),
         )
     # -- governance moves + system log (SDF-8) -----------------------------
-
-    def propose_mode_switch(self, board_id: str, to_mode: str | None = None,
-                            opened_by: str | None = None) -> str:
-        """Open a mode_switch Q (majority decides; mode flips on 'for')."""
-        return self._open_move(board_id, "mode_switch", to_mode, opened_by)
-
-    def propose_socrates_swap(self, board_id: str, to_handle: str | None = None,
-                              opened_by: str | None = None) -> str:
-        """Open a socrates_swap Q; the settled mandate is SDF-9's to apply."""
-        return self._open_move(board_id, "socrates_swap", to_handle,
-                               opened_by)
-
-    def propose_active_claim_switch(self, board_id: str, to_node: str | None = None,
-                                    opened_by: str | None = None) -> str:
-        """Open an active_claim_switch Q; this slice never re-activates."""
-        return self._open_move(board_id, "active_claim_switch", to_node,
-                               opened_by)
 
     def propose_ingress_selection(self, board_id: str, candidate: str,
                                   opened_by: str | None = None) -> str:
@@ -991,12 +868,12 @@ class BoardService:
 
     def read_system_log(self, board_id: str,
                         kind: str | None = None) -> list[dict]:
-        """Facilitator-blind system log for a board, oldest first.
+        """System log for a board, oldest first.
 
         Heals from the journal before reading, so a settlement that bypassed
         the service (the ``machine()`` escape hatch) is backfilled. Entries
         carry ids and counts, never chat voice; they must never be rendered
-        as facilitator contributions.
+        as a person's post.
         """
         self.board(board_id)
         self._heal_log(board_id)
@@ -1068,42 +945,16 @@ class BoardService:
         state = machine.state
         if state.status == "closed":            # terminality outranks validation
             raise BoardClosed(f"board {board_id} is closed")
-        if kind not in GOVERNANCE_MOVE_KINDS and kind != "tiebreak":
+        if kind not in GOVERNANCE_MOVE_KINDS:
             raise ValueError(
                 f"kind must be one of {GOVERNANCE_MOVE_KINDS}, not {kind!r}")
         if opened_by is not None and opened_by not in state.handles:
             raise UnknownHandle(f"unknown handle: {opened_by}")
-        # Fused (panel b): the facilitator never proposes a close — checked
-        # before the duplicate slot so the refusal is identical from any
-        # position and leaves journal + log untouched.
-        if (kind == "close" and opened_by is not None
-                and state.handles[opened_by].is_facilitator):
-            raise FacilitatorNeverProposes(
-                "the facilitator never proposes a close")
         existing = self._open_move_q_id(state, kind, subject)
         if existing is not None:
             raise GovernanceAlreadyOpen(
                 f"{kind} is already open as {existing}")
-        if kind == "mode_switch":
-            if subject not in MODES:
-                raise ValueError(f"mode must be one of {MODES}")
-            if state.mode == subject:
-                raise GovernanceNoOp(f"board is already in {subject!r} mode")
-        elif kind == "socrates_swap":
-            if subject not in state.handles:
-                raise UnknownHandle(f"unknown handle: {subject}")
-        elif kind == "active_claim_switch":
-            if subject not in state.nodes:
-                raise UnknownNode(f"unknown node: {subject}")
-            # Fused (panels a+b/c): NoOp when the target is already active —
-            # via the canonical active pointer OR the node flag, so both
-            # panel wordings agree.
-            node = state.nodes.get(subject or "")
-            if subject == state.active_node_id or (
-                    node is not None and getattr(node, "is_active", False)):
-                raise GovernanceNoOp(
-                    f"node {subject} is already the active claim")
-        elif kind == "ingress_selection":
+        if kind == "ingress_selection":
             if not isinstance(subject, str) or not subject.strip():
                 raise ValueError(
                     "ingress candidate must be a non-blank string")
@@ -1170,9 +1021,7 @@ class BoardService:
     def _after_settlement(self, board_id: str, q_id: str) -> None:
         """Post-mutation hook: log a fresh settlement, mirror the registry.
 
-        Fused: logs any settled non-refutation Q (the five room moves AND a
-        tiebreak settled through service voting, per the approved plan R5/R6
-        — panel c), so a full rebuild never drops a tiebreak. Refusals and
+        Logs any settled non-refutation Q. Refusals and
         open Qs log nothing. Dedupe is read-based (a ``governance_settled``
         entry for this ``q_id`` already on disk), so reloads and double
         hooks can never log a settlement twice. Never called from a read.
@@ -1190,14 +1039,13 @@ class BoardService:
         self.system.append_event(board_id, GOVERNANCE_SETTLED,
                                  self._settled_payload(state, q),
                                  ts=self._clock())
-        if q.kind in ("mode_switch", "close") and q.outcome == "for":
+        if q.kind == "close" and q.outcome == "for":
             self.sync_registry(board_id)
 
     def _heal_log(self, board_id: str) -> None:
         """Backfill system entries for governance Qs recorded in the journal.
 
-        Fused (panels b/c): covers every non-refutation Q (room moves AND
-        tiebreak, per plan R5/R6) with the same payload builders the write
+        Covers every non-refutation Q (room moves) with the same payload builders the write
         path uses, appended interleaved by journal seq
         (``opened_seq``/``settled_seq``) so a total-file-loss rebuild is
         line-identical to the normal path. Read-based dedupe keeps a second
@@ -1218,11 +1066,9 @@ class BoardService:
         for q in state.questions.values():
             if q.kind == "refutation":
                 continue
-            # Only room moves have ``governance_opened`` via _open_move, but
-            # a hatch-opened move or tiebreak still needs its open entry.
+            # A hatch-opened move still needs its open entry: any
+            # non-refutation Q missing its open entry is backfilled.
             if q.q_id not in have_opened:
-                # Room moves + tiebreak: any non-refutation Q missing its
-                # open entry is backfilled (panel c chronological test).
                 backlog.append((q.opened_seq or 0, "open", q.q_id))
             if (q.status == "settled" and q.q_id not in have_settled):
                 backlog.append((q.settled_seq or q.opened_seq or 0,
@@ -1234,8 +1080,6 @@ class BoardService:
         for _, what, q_id in backlog:
             q = by_id[q_id]
             if what == "open":
-                # Skip tiebreak opens that predate the move kinds? No — the
-                # plan requires tiebreak heals consistently, so log it.
                 self.system.append_event(board_id, GOVERNANCE_OPENED,
                                          self._opened_payload(q),
                                          ts=self._clock())

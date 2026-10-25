@@ -106,6 +106,8 @@ _LEVEL4 = __import__("re").compile(r"^====")
 _COMMENT = __import__("re").compile(r"<!--.*?-->", __import__("re").S)
 _REF = __import__("re").compile(r"<ref[^>]*>.*?</ref>|<ref[^>]*/\s*>", __import__("re").S | __import__("re").I)
 _TEMPLATE = __import__("re").compile(r"\{\{[^{}]*\}\}")
+_LINK_PIPE = __import__("re").compile(r"\[\[([^|\]]+)\|([^\]]+)\]\]")
+_LINK_SIMPLE = __import__("re").compile(r"\[\[([^\]]+)\]\]")
 
 
 def _english_lines(wikitext: str) -> list[str]:
@@ -133,6 +135,11 @@ def _clean_gloss(text: str) -> str:
         text = _TEMPLATE.sub(" ", text)
     text = _REF.sub(" ", text)
     text = _COMMENT.sub(" ", text)
+    # Wiki links show their display text: [[target|display]] keeps the part
+    # after the pipe, [[target]] keeps the target, so trailing inflections
+    # outside the brackets survive ([[intimidate]]d -> intimidated).
+    text = _LINK_PIPE.sub(r"\2", text)
+    text = _LINK_SIMPLE.sub(r"\1", text)
     return " ".join(text.split())
 
 

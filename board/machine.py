@@ -5,7 +5,7 @@ Every public mutation validates against the current ``BoardState``,
 appends exactly one journal event (when a store is attached), applies it
 through the same reducer the journal fold uses, then runs settle effects
 (which append their own consequence events: q_settled, q_frozen,
-node_status_changed, mode_switch_applied, board_closed). Replay therefore
+node_status_changed, board_closed). Replay therefore
 reconstructs the identical state by construction (AC4).
 """
 
@@ -13,11 +13,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from board import roles as R
 from board import verdicts as V
 from board.model import (
     MEDIA,
-    MODES,
     Q_KINDS,
     REFUTATION_SIDES,
     GOVERNANCE_SIDES,
@@ -47,44 +45,8 @@ class NodeFrozen(VerdictError):
     """Cast/CE-attach on an inactive (superseded) node's refutation Q."""
 
 
-class FacilitatorNeverProposes(VerdictError):
-    """The facilitator cannot propose a close Q."""
-
-
-class FacilitatorCannotVote(VerdictError):
-    """The facilitator votes only in participates mode (or via tiebreak)."""
-
-
-class SeatNeverVacant(VerdictError):
-    """The Socrates seat cannot be vacated once assigned (SDF-9 AC1)."""
-
-
-class FacilitatorHoldsNoSeat(VerdictError):
-    """A facilitator cannot hold a seat/defense outside participates mode."""
-
-
 class NotDefender(VerdictError):
     """The handle is not the active claim's defender."""
-
-
-class NoPendingCede(VerdictError):
-    """accept_defense with no offered cede pending."""
-
-
-class NotCedeTarget(VerdictError):
-    """accept_defense by a handle other than the offered target."""
-
-
-class StaleCede(VerdictError):
-    """The pending cede is stale: active claim or defense moved since offer."""
-
-
-class DuplicateTiebreak(VerdictError):
-    """Tiebreak invoked twice for one CE, or a second tiebreak ballot."""
-
-
-class TiebreakNotPassed(VerdictError):
-    """Tiebreak ballot before the CE's tiebreak Q settled "for"."""
 
 
 class SideMismatch(VerdictError):
@@ -111,10 +73,6 @@ class UnknownCounterexample(VerdictError):
     """No such counterexample."""
 
 
-class ModeSwitchNotSettled(VerdictError):
-    """switch_mode called without a settled "for" mode_switch Q."""
-
-
 class NoBoard(VerdictError):
     """Mutation before any board was created on this machine."""
 
@@ -137,21 +95,31 @@ class NotActiveNode(NodeFrozen):
 # --------------------------------------------------------------------------
 
 EVENT_TYPES = (
-    "board_created", "handle_enrolled", "name_bound", "socrates_set",
+    "board_created", "handle_enrolled", "name_bound",
     "node_registered", "q_opened", "ballot_cast", "ambient_recorded",
-    "retraction", "medium_toggled", "mode_switch_applied",
-    "tiebreak_ballot_cast", "node_status_changed", "q_settled", "q_frozen",
+    "retraction", "medium_toggled",
+    "node_status_changed", "q_settled", "q_frozen",
     "board_closed",
-    # SDF-9 roles/seats (fused a+b+c: offer+accept pair plus explicit
-    # decline/withdraw closes so every cede lifecycle step is journaled).
-    "defense_cede_offered", "defense_cede_accepted",
-    "defense_cede_declined", "defense_cede_withdrawn",
-    "active_switch_applied",
 )
+
+# Journal types the sdf-zj6.1 cut dropped (the Socrates seat and its
+# ``socrates_set`` event, the facilitator modes and ``mode_switch_applied``,
+# the tiebreak and its ballot, the active-claim switch and the defense
+# hand-over). Old journals, such as Symposiums started on the pull-request-
+# #26 code, still hold them: replay skips them so those boards still open.
+# The skip only drops cut governance — claims and counterexamples replay
+# exactly as journaled; ballots a pre-cut switch to facilitates mode
+# withdrew count again after replay (the withdrawal rode with the switch).
+DROPPED_EVENT_TYPES = frozenset({
+    "socrates_set", "mode_switch_applied", "tiebreak_ballot_cast",
+    "active_switch_applied", "defense_cede_offered",
+    "defense_cede_accepted", "defense_cede_declined",
+    "defense_cede_withdrawn",
+})
 
 
 def _empty_state() -> BoardState:
-    return BoardState(board_id="", x_title="", mode="participates",
+    return BoardState(board_id="", x_title="",
                       medium="async")
 
 
@@ -168,21 +136,20 @@ def _apply(state: BoardState, event: dict) -> None:
     state.seq = event["seq"]
     t = event["type"]
     p = event["payload"]
+    if t in DROPPED_EVENT_TYPES:
+        return
     if t == "board_created":
         state.board_id = p["board_id"]
         state.x_title = p["x_title"]
-        state.mode = p["mode"]
-        state.medium = p["medium"]
+        state.medium = p.get("medium", "async")
         state.status = "open"
     elif t == "handle_enrolled":
         state.handles[p["handle_id"]] = Handle(
-            p["handle_id"], p["display"], p["kind"], p["is_facilitator"])
+            p["handle_id"], p["display"], p["kind"])
     elif t == "name_bound":
         h = state.handles[p["handle_id"]]
         h.display = p["display"]
         h.kind = "bound"
-    elif t == "socrates_set":
-        state.socrates_handle_id = p["handle_id"]
     elif t == "node_registered":
         node = Node(p["node_id"], p["version"], "open", True, [],
                     p.get("text", ""), p.get("defender"))
@@ -191,24 +158,6 @@ def _apply(state: BoardState, event: dict) -> None:
             state.nodes[prev].is_active = False
         state.nodes[node.node_id] = node
         state.active_node_id = node.node_id
-    elif t == "defense_cede_offered":
-        state.pending_defense_offer = {
-            "from": p["from"], "to": p["to"], "node_id": p["node_id"],
-        }
-    elif t == "defense_cede_accepted":
-        state.pending_defense_offer = None
-        state.nodes[p["node_id"]].defender = p["to"]
-    elif t in ("defense_cede_declined", "defense_cede_withdrawn"):
-        # Fused from panel c lifecycle: an answered-but-unaccepted cede
-        # clears the one pending slot and moves no defense (AC2 holds for
-        # decline/withdraw exactly as for a bare offer).
-        state.pending_defense_offer = None
-    elif t == "active_switch_applied":
-        prev = p.get("prev_active_node_id")
-        if prev is not None and prev in state.nodes:
-            state.nodes[prev].is_active = False
-        state.nodes[p["node_id"]].is_active = True
-        state.active_node_id = p["node_id"]
     elif t == "q_opened":
         state.questions[p["q_id"]] = Question(
             p["q_id"], p["kind"], "open", p.get("subject"),
@@ -218,43 +167,18 @@ def _apply(state: BoardState, event: dict) -> None:
                                 p["q_id"])
             state.ces[ce.ce_id] = ce
             state.nodes[p["node_id"]].ce_ids.append(ce.ce_id)
-        elif p["kind"] == "tiebreak":
-            state.ces[p["subject"]].tiebreak_invoked = True
-    elif t in ("ballot_cast", "ambient_recorded", "tiebreak_ballot_cast"):
-        if t == "tiebreak_ballot_cast":
-            # the tiebreak ballot's side/channel/labeled are fixed
-            # semantics: the facilitator's one reasoned ballot is always
-            # a rebuttal ("still-not-refuted stays so")
-            ballot = Ballot(
-                p["ballot_id"], p["q_id"], p["handle_id"], "explicit",
-                "rebutted", p.get("reason"), True,
-                event["seq"], p["receive_time"])
-        else:
-            ballot = Ballot(
-                p["ballot_id"], p["q_id"], p["handle_id"], p["channel"],
-                p["side"], p.get("reason"), p.get("labeled", False),
-                event["seq"], p["receive_time"])
+    elif t in ("ballot_cast", "ambient_recorded"):
+        # Old journals may still carry a "labeled" key on ballot_cast
+        # payloads; it is ignored: the tiebreak that wrote True is dropped.
+        ballot = Ballot(
+            p["ballot_id"], p["q_id"], p["handle_id"], p["channel"],
+            p["side"], p.get("reason"),
+            event["seq"], p["receive_time"])
         state.ballots[ballot.ballot_id] = ballot
-        if t == "tiebreak_ballot_cast":
-            state.ces[p["ce_id"]].tiebreak_ballot_id = ballot.ballot_id
     elif t == "retraction":
         state.ballots[p["ballot_id"]].withdrawn = True
     elif t == "medium_toggled":
         state.medium = p["medium"]
-    elif t == "mode_switch_applied":
-        state.mode = p["mode"]
-        for bid in p.get("withdrawn_ballot_ids", []):
-            state.ballots[bid].withdrawn = True
-        if p["mode"] == "facilitates":
-            # membership recompute on open refutation Qs only: the
-            # facilitator leaves every open roster (late non-voters never
-            # re-enter; settled Qs are history and untouched)
-            for q in state.questions.values():
-                if q.kind == "refutation" and q.status == "open":
-                    q.open_roster = [
-                        h for h in q.open_roster
-                        if not state.handles[h].is_facilitator
-                    ]
     elif t == "node_status_changed":
         state.nodes[p["node_id"]].status = p["status"]
     elif t == "q_settled":
@@ -312,13 +236,6 @@ def _unique_display(state: BoardState, base: str) -> str:
     return f"{base}#{k}"
 
 
-def _first_facilitator(state: BoardState) -> str | None:
-    for h in state.handles.values():
-        if h.is_facilitator:
-            return h.handle_id
-    return None
-
-
 # --------------------------------------------------------------------------
 # The machine
 # --------------------------------------------------------------------------
@@ -339,12 +256,11 @@ class VerdictMachine:
                 self._events = store.read_all(board_id)
 
     @classmethod
-    def in_memory(cls, mode: str = "participates",
-                  medium: str = "async") -> "VerdictMachine":
+    def in_memory(cls, medium: str = "async") -> "VerdictMachine":
         """Fresh memory-only machine with a ready board (AC1–AC3 tests)."""
         m = cls()
         m.create_board("board-in-memory", "Justice (Republic Book I)",
-                       mode=mode, medium=medium)
+                       medium=medium)
         return m
 
     # -- state access ------------------------------------------------------
@@ -424,28 +340,12 @@ class VerdictMachine:
             return                    # only a settled 'for' is a mandate
         if q.kind == "close":
             self.close_board(q_id)
-        elif q.kind == "mode_switch":
-            self.switch_mode(q_id, q.subject)
-        elif q.kind == "socrates_swap":
-            # G8 backstop (fused a+b: panel b spells it via the pure
-            # seat_eligible read, panel a inline — same predicate): the mode
-            # may have flipped between open and settle. Skip silently —
-            # never raise after q_settled (SDF-2 defect pattern); the
-            # mandate stays settled for the room to re-propose.
-            target = self._state.handles.get(q.subject)
-            if target is not None and R.seat_eligible(
-                    self._state, q.subject):
-                self.set_socrates(q.subject)
-        elif q.kind == "active_claim_switch":
-            if q.subject in self._state.nodes:
-                self.activate_node(q.subject)
-        # ingress_selection / tiebreak: settle + record the outcome;
-        # consumption belongs to downstream slices (SDF-11/18).
+        # ingress_selection: settle + record the outcome; consumption
+        # belongs to downstream slices (SDF-11/18).
 
     # -- board + identities -------------------------------------------------
 
     def create_board(self, board_id: str, x_title: str,
-                     mode: str = "participates",
                      medium: str = "async") -> BoardState:
         if self._state is not None:
             raise BoardAlreadyExists(
@@ -454,20 +354,18 @@ class VerdictMachine:
             raise ValueError("board_id required")
         if not x_title or not isinstance(x_title, str):
             raise ValueError("x_title required")
-        if mode not in MODES:
-            raise ValueError(f"mode must be one of {MODES}")
         if medium not in MEDIA:
             raise ValueError(f"medium must be one of {MEDIA}")
         self._board_id = board_id
         self._state = _empty_state()
         self._commit("board_created", {
             "board_id": board_id, "x_title": x_title,
-            "mode": mode, "medium": medium,
+            "medium": medium,
         })
         return self._state
 
-    def enroll_handle(self, display: str, kind: str = "enrolled",
-                      is_facilitator: bool = False) -> str:
+    def enroll_handle(self, display: str,
+                      kind: str = "enrolled") -> str:
         self._check_open()
         if not display or not isinstance(display, str):
             raise ValueError("display required")
@@ -477,7 +375,7 @@ class VerdictMachine:
         display = _unique_display(self._state, display)
         self._commit("handle_enrolled", {
             "handle_id": handle_id, "display": display,
-            "kind": kind, "is_facilitator": bool(is_facilitator),
+            "kind": kind,
         })
         return handle_id
 
@@ -493,121 +391,25 @@ class VerdictMachine:
         })
         return provisional_handle_id
 
-    def set_socrates(self, handle_id: str | None) -> dict:
-        """Assign the Socrates seat; never vacated once assigned (AC1)."""
-        self._check_open()
-        if handle_id is None:
-            raise SeatNeverVacant("the Socrates seat cannot be vacated")
-        self._get_handle(handle_id)
-        R.check_seat_eligible(self._state, handle_id, FacilitatorHoldsNoSeat)
-        return self._commit("socrates_set", {"handle_id": handle_id})
-
-    def socrates_seat(self) -> str | None:
-        """The stored Socrates seat holder (``None`` before first assign)."""
-        self._require_board()
-        return R.seat_holder(self._state)
-
     def defender(self) -> str | None:
         """Active claim's defender handle_id (``None`` while no claim)."""
         self._require_board()
-        return R.defender(self._state)
+        node_id = self._state.active_node_id
+        if node_id is None:
+            return None
+        node = self._state.nodes.get(node_id)
+        return node.defender if node is not None else None
 
     def require_defender(self, handle_id: str) -> str:
         """Return ``handle_id`` when it is the active defender, else refuse."""
         self._require_board()
-        current = R.defender(self._state)
+        current = self.defender()
         if current is None:
             raise NotDefender("no defense to hold on this board")
         if current != handle_id:
             raise NotDefender(
                 f"handle {handle_id!r} is not the active defender")
         return handle_id
-
-    def offer_defense(self, to_handle_id: str, by: str) -> dict:
-        """The defender names a successor; nothing moves until accept (AC2)."""
-        self._check_open()
-        to = self._get_handle(to_handle_id)
-        actor = self._get_handle(by)
-        current = R.defender(self._state)
-        if current is None or actor.handle_id != current:
-            raise NotDefender(
-                f"handle {by!r} is not the active defender")
-        if to.handle_id == actor.handle_id:
-            raise ValueError("cannot offer the defense to yourself")
-        R.check_seat_eligible(self._state, to.handle_id,
-                              FacilitatorHoldsNoSeat)      # G3
-        pending = self._state.pending_defense_offer
-        if (pending is not None and pending["from"] == current
-                and pending["to"] == to.handle_id):
-            # identical re-offer: return the original event, commit nothing
-            for event in reversed(self._events):
-                if (event["type"] == "defense_cede_offered"
-                        and event["payload"] == pending):
-                    return event
-            return dict(pending)      # defensive; unreachable from a fold
-        return self._commit("defense_cede_offered", {
-            "from": current, "to": to.handle_id,
-            "node_id": self._state.active_node_id,
-        })
-
-    def accept_defense(self, by: str) -> dict:
-        """The offered target accepts; the active node's defense moves."""
-        self._check_open()
-        actor = self._get_handle(by)
-        pending = self._state.pending_defense_offer
-        if pending is None:
-            raise NoPendingCede("no defense cede is pending")
-        if actor.handle_id != pending["to"]:
-            raise NotCedeTarget(
-                f"handle {by!r} is not the offered cede target")
-        R.check_seat_eligible(self._state, actor.handle_id,
-                              FacilitatorHoldsNoSeat)      # G4
-        if pending["node_id"] != self._state.active_node_id:
-            raise StaleCede("the active claim moved since the offer")
-        if pending["from"] != R.defender(self._state):
-            raise StaleCede("the defense moved since the offer")
-        return self._commit("defense_cede_accepted", {
-            "from": pending["from"], "to": pending["to"],
-            "node_id": self._state.active_node_id,
-        })
-
-    def decline_defense(self, by: str) -> dict:
-        """The offered target declines; the offer clears, defense stays (AC2).
-
-        Fused from panel c's cede lifecycle (decline half): logs
-        ``defense_cede_declined`` with the pending ``{from,to,node_id}`` and
-        clears the pending slot. No ballot, no question, no defense move."""
-        self._check_open()
-        actor = self._get_handle(by)
-        pending = self._state.pending_defense_offer
-        if pending is None:
-            raise NoPendingCede("no defense cede is pending")
-        if actor.handle_id != pending["to"]:
-            raise NotCedeTarget(
-                f"handle {by!r} is not the offered cede target")
-        return self._commit("defense_cede_declined", {
-            "from": pending["from"], "to": pending["to"],
-            "node_id": pending["node_id"],
-        })
-
-    def withdraw_defense(self, by: str) -> dict:
-        """The offerer withdraws; the offer clears, defense stays (AC2).
-
-        Fused from panel c's cede lifecycle (withdraw half): logs
-        ``defense_cede_withdrawn`` and clears the pending slot. Only the
-        recorded ``from`` handle may withdraw."""
-        self._check_open()
-        actor = self._get_handle(by)
-        pending = self._state.pending_defense_offer
-        if pending is None:
-            raise NoPendingCede("no defense cede is pending")
-        if actor.handle_id != pending["from"]:
-            raise NotDefender(
-                f"handle {by!r} did not offer the pending defense cede")
-        return self._commit("defense_cede_withdrawn", {
-            "from": pending["from"], "to": pending["to"],
-            "node_id": pending["node_id"],
-        })
 
     # -- canvas --------------------------------------------------------------
 
@@ -638,8 +440,6 @@ class VerdictMachine:
             raise ValueError("text required")
         if defender is not None:
             self._get_handle(defender)
-            R.check_seat_eligible(self._state, defender,
-                                  FacilitatorHoldsNoSeat)  # G2
         prev = self._state.active_node_id
         version = max((n.version for n in self._state.nodes.values()),
                       default=0) + 1
@@ -649,28 +449,6 @@ class VerdictMachine:
         })
         self._supersede(prev)
         return node_id
-
-    def activate_node(self, node_id: str) -> dict | None:
-        """Re-activate an existing node (a settled active-switch mandate).
-
-        Defense follows automatically: the defender read derives from the
-        active node, so switching back restores the old claimant's defense.
-        Superseded-node open CE Qs freeze and the new active node's status is
-        recomputed, mirroring a fresh ``register_node``.
-        """
-        self._check_open()
-        node = self._state.nodes.get(node_id)
-        if node is None:
-            raise UnknownNode(f"unknown node: {node_id}")
-        if node.is_active:
-            return None                      # already active: no event
-        prev = self._state.active_node_id
-        event = self._commit("active_switch_applied", {
-            "node_id": node_id, "prev_active_node_id": prev,
-        })
-        self._supersede(prev)
-        self._recompute_active_node_status()
-        return event
 
     def open_refutation_q(self, node_id: str, shape: str,
                           opened_by: str | None = None
@@ -701,60 +479,13 @@ class VerdictMachine:
         if kind not in Q_KINDS or kind == "refutation":
             raise ValueError(f"invalid governance kind: {kind}")
         if opened_by is not None:
-            proposer = self._get_handle(opened_by)
-            if kind == "close" and proposer.is_facilitator:
-                raise FacilitatorNeverProposes(
-                    "the facilitator never proposes a close")
-        if kind == "tiebreak":
-            if self._state.mode != "facilitates":
-                raise VerdictError(
-                    "tiebreak invocation requires facilitates mode")
-            ce = self._state.ces.get(subject or "")
-            if ce is None:
-                raise UnknownCounterexample(
-                    f"unknown ce: {subject}")
-            if ce.tiebreak_invoked:
-                raise DuplicateTiebreak(
-                    "one tiebreak invocation per CE, ever")
-        if kind == "mode_switch":
-            if subject not in MODES:
-                raise ValueError(f"mode_switch subject must be one of {MODES}")
-            if subject == "facilitates":
-                self._check_no_facilitator_role()      # G7
-        elif kind == "socrates_swap":
-            if subject not in self._state.handles:
-                raise UnknownHandle(f"unknown handle: {subject}")
-            R.check_seat_eligible(self._state, subject,
-                                  FacilitatorHoldsNoSeat)  # G5
-        elif kind == "active_claim_switch":
-            if subject not in self._state.nodes:
-                raise UnknownNode(f"unknown node: {subject}")
-            target = self._state.nodes[subject]
-            if target.is_active or subject == self._state.active_node_id:
-                raise VerdictError(
-                    f"node {subject} is already the active claim")
-            if target.defender is not None:
-                R.check_seat_eligible(self._state, target.defender,
-                                      FacilitatorHoldsNoSeat)  # G6
+            self._get_handle(opened_by)
         q_id = f"q{len(self._state.questions) + 1}"
         self._commit("q_opened", {
             "q_id": q_id, "kind": kind, "subject": subject,
             "opened_by": opened_by, "roster": self._open_roster(),
         })
         return q_id
-
-    def _check_no_facilitator_role(self) -> None:
-        """G7 pre-flight: entering Facilitates with a facilitator holding a
-        seat or the active defense would strand it; the room rotates first."""
-        holders = (self._state.socrates_handle_id, R.defender(self._state))
-        for handle_id in holders:
-            if handle_id is None:
-                continue
-            handle = self._state.handles.get(handle_id)
-            if handle is not None and handle.is_facilitator:
-                raise FacilitatorHoldsNoSeat(
-                    "rotate the facilitator out of the seat/defense before "
-                    "entering facilitates mode")
 
     # -- votes ----------------------------------------------------------------
 
@@ -778,10 +509,6 @@ class VerdictMachine:
         if side not in valid_sides:
             raise SideMismatch(
                 f"side {side!r} does not match {q.kind} Q vocabulary")
-        handle = self._state.handles[handle_id]
-        if handle.is_facilitator and self._state.mode != "participates":
-            raise FacilitatorCannotVote(
-                "facilitator votes only in participates mode")
         if receive_time is None:
             receive_time = float(self._state.seq + 1)
         else:
@@ -790,7 +517,7 @@ class VerdictMachine:
         self._commit("ballot_cast", {
             "ballot_id": ballot_id, "q_id": q_id, "handle_id": handle_id,
             "channel": channel, "side": side, "reason": reason,
-            "labeled": False, "receive_time": receive_time,
+            "receive_time": receive_time,
         })
         self._settle_tail(q_id)
         return ballot_id
@@ -843,74 +570,6 @@ class VerdictMachine:
             raise ValueError(f"medium must be one of {MEDIA}")
         self._commit("medium_toggled", {"medium": medium})
 
-    def switch_mode(self, q_id: str, new_mode: str) -> None:
-        """Apply a settled mode_switch Q: recompute membership on OPEN
-        refutation Qs only; settled Qs are history and untouched."""
-        self._check_open()
-        q = self._get_q(q_id)
-        if (q.kind != "mode_switch" or q.status != "settled"
-                or q.outcome != "for" or q.subject != new_mode):
-            raise ModeSwitchNotSettled(
-                f"mode switch requires a settled 'for' Q on {new_mode}")
-        withdrawn: list[str] = []
-        if new_mode == "facilitates":
-            for b in self._state.ballots.values():
-                if b.withdrawn:
-                    continue
-                qq = self._state.questions.get(b.q_id)
-                if (qq is None or qq.kind != "refutation"
-                        or qq.status != "open"):
-                    continue
-                if self._state.handles[b.handle_id].is_facilitator:
-                    withdrawn.append(b.ballot_id)
-            withdrawn.sort()
-        self._commit("mode_switch_applied", {
-            "q_id": q_id, "mode": new_mode,
-            "withdrawn_ballot_ids": withdrawn,
-        })
-        self._recompute_active_node_status()
-
-    def tiebreak_ballot(self, ce_id: str, reason: str | None) -> str:
-        """The one labeled, reasoned facilitator ballot on the CE's
-        refutation Q — only after its tiebreak Q settled "for"."""
-        self._check_open()
-        ce = self._state.ces.get(ce_id)
-        if ce is None:
-            raise UnknownCounterexample(f"unknown ce: {ce_id}")
-        if self._state.mode != "facilitates":
-            raise TiebreakNotPassed(
-                "tiebreak ballot requires facilitates mode")
-        if not reason or not isinstance(reason, str) or not reason.strip():
-            raise ValueError("tiebreak ballot requires a non-empty reason")
-        ref_q = self._state.questions[ce.q_id]
-        node = self._state.nodes[ce.node_id]
-        if not node.is_active:
-            raise NodeFrozen(f"node {ce.node_id} is inactive")
-        if ref_q.status != "open":
-            raise QNotOpen(f"question {ref_q.q_id} is {ref_q.status}")
-        if ce.tiebreak_ballot_id is not None:
-            raise DuplicateTiebreak(
-                "one tiebreak ballot per CE, ever")
-        tb_q = next((q for q in self._state.questions.values()
-                     if q.kind == "tiebreak" and q.subject == ce_id), None)
-        if tb_q is None or tb_q.status != "settled" or tb_q.outcome != "for":
-            raise TiebreakNotPassed(
-                "the CE's tiebreak Q must settle 'for' first")
-        facilitator_id = _first_facilitator(self._state)
-        if facilitator_id is None:
-            raise FacilitatorCannotVote("no facilitator handle enrolled")
-        ballot_id = f"b{len(self._state.ballots) + 1}"
-        self._commit("tiebreak_ballot_cast", {
-            "ballot_id": ballot_id, "q_id": ce.q_id, "ce_id": ce_id,
-            "handle_id": facilitator_id, "reason": reason,
-            "receive_time": float(self._state.seq + 1),
-            # side/channel/labeled are fixed semantics of the tiebreak:
-            # the facilitator's reasoned ballot is always a rebuttal
-            # ("still-not-refuted stays so")
-        })
-        self._settle_tail(ce.q_id)
-        return ballot_id
-
     def close_board(self, q_id: str) -> None:
         """Fire the close effect: only via a settled close Q with outcome
         "for". One board_closed event freezes every open Q, snapshots the
@@ -949,12 +608,10 @@ class VerdictMachine:
         canvas = {
             "board_id": state.board_id,
             "x_title": state.x_title,
-            "mode": state.mode,
             "medium": state.medium,
             "status": "closed",
             "closed_seq": state.seq + 1,
             "active_node_id": state.active_node_id,
-            "socrates_handle_id": state.socrates_handle_id,
             "nodes": [
                 {"node_id": n.node_id, "version": n.version,
                  "status": ("carried_unresolved"
@@ -965,8 +622,7 @@ class VerdictMachine:
             ],
             "ces": [
                 {"ce_id": c.ce_id, "node_id": c.node_id, "shape": c.shape,
-                 "q_id": c.q_id, "tiebreak_invoked": c.tiebreak_invoked,
-                 "tiebreak_ballot_id": c.tiebreak_ballot_id}
+                 "q_id": c.q_id}
                 for c in state.ces.values()
             ],
             "questions": [

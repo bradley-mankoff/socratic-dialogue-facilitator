@@ -10,13 +10,11 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
-Mode = Literal["participates", "facilitates"]
 Medium = Literal["async", "live"]
 Side = Literal["stands", "rebutted", "for", "against"]
 Channel = Literal["explicit", "ambient"]
 QKind = Literal[
-    "refutation", "close", "mode_switch", "socrates_swap",
-    "active_claim_switch", "ingress_selection", "tiebreak",
+    "refutation", "close", "ingress_selection",
 ]
 QStatus = Literal["open", "settled", "frozen"]      # frozen = closed by close
 HandleKind = Literal["enrolled", "provisional", "bound"]
@@ -31,10 +29,8 @@ def sides_for(kind: str) -> tuple[str, ...]:
     """Ballot vocabulary for a question kind."""
     return REFUTATION_SIDES if kind == "refutation" else GOVERNANCE_SIDES
 Q_KINDS: tuple[QKind, ...] = (
-    "refutation", "close", "mode_switch", "socrates_swap",
-    "active_claim_switch", "ingress_selection", "tiebreak",
+    "refutation", "close", "ingress_selection",
 )
-MODES: tuple[Mode, ...] = ("participates", "facilitates")
 MEDIA: tuple[Medium, ...] = ("async", "live")
 SHAPES: tuple[str, ...] = ("3a", "3b")
 
@@ -44,7 +40,6 @@ class Handle:
     handle_id: str
     display: str
     kind: HandleKind
-    is_facilitator: bool
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -58,7 +53,6 @@ class Ballot:
     channel: Channel
     side: Side
     reason: str | None
-    labeled: bool
     seq: int
     receive_time: float
     withdrawn: bool = False
@@ -72,8 +66,8 @@ class Question:
     q_id: str
     kind: QKind
     status: QStatus
-    subject: str | None        # ce_id (refutation/tiebreak), node_id, mode...
-    open_roster: list[str]     # handle_ids present at open, mode-adjusted
+    subject: str | None        # ce_id (refutation Qs), node_id, ingress...
+    open_roster: list[str]     # handle_ids present at open, frozen then
     opened_seq: int
     opened_by: str | None
     settled_seq: int | None = None
@@ -89,8 +83,6 @@ class Counterexample:
     node_id: str
     shape: Literal["3a", "3b"]
     q_id: str                # 1:1 — every CE has exactly one refutation Q
-    tiebreak_invoked: bool = False   # once per CE, ever; set at invocation
-    tiebreak_ballot_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -114,7 +106,6 @@ class Node:
 class BoardState:
     board_id: str
     x_title: str
-    mode: Mode
     medium: Medium
     status: Literal["open", "closed"] = "open"   # closed is terminal
     seq: int = 0                                 # last applied event seq
@@ -124,10 +115,8 @@ class BoardState:
     questions: dict[str, Question] = field(default_factory=dict)
     ballots: dict[str, Ballot] = field(default_factory=dict)
     active_node_id: str | None = None
-    socrates_handle_id: str | None = None
     carried_unresolved: list[dict] | None = None  # tray snapshot at close
     canvas: dict | None = None                    # finalized canvas snapshot
-    pending_defense_offer: dict | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

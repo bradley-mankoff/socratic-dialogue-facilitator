@@ -45,7 +45,7 @@ SOURCE_TAG = "dictionary-chain"
 # Read straight from ``journal.jsonl`` — the machine stays the only writer
 # and no vote event is ever copied into the claim-only ``meta.jsonl``.
 VOTE_EVENT_TYPES: tuple[str, ...] = (
-    "ballot_cast", "retraction", "tiebreak_ballot_cast",
+    "ballot_cast", "retraction",
 )
 
 
@@ -83,7 +83,7 @@ def next_label(existing: set[str], base: str) -> str:
 class BoardRecord:
     """Registry row for one board: identity ``(x_norm, label)`` plus mirrors.
 
-    ``mode``/``medium``/``status`` are *mirrors* of the machine's live state;
+    ``medium``/``status`` are *mirrors* of the machine's live state;
     :meth:`server.service.BoardService.sync_registry` is the only writer.
     Views always read the machine, never the mirror.
     """
@@ -93,7 +93,6 @@ class BoardRecord:
     x_norm: str
     x_title: str
     label: str
-    mode: str = "participates"
     medium: str = "async"
     status: str = "open"
     created_at: str = ""
@@ -110,7 +109,6 @@ class BoardRecord:
             x_norm=d.get("x_norm") or normalize_x(x),
             x_title=d.get("x_title", x),
             label=d["label"],
-            mode=d.get("mode", "participates"),
             medium=d.get("medium", "async"),
             status=d.get("status", "open"),
             created_at=d.get("created_at", ""),
@@ -240,7 +238,7 @@ class VoteResult:
 
     board_id: str
     node_id: str
-    ce_id: str | None          # CE subject on refutation + tiebreak Qs
+    ce_id: str | None          # CE subject on refutation Qs
     q_id: str
     ballot_id: str
     handle_id: str
@@ -261,25 +259,6 @@ class VoteResult:
         return cls(**d)
 
 
-@dataclass(frozen=True)
-class TiebreakResult:
-    """Outcome of ``invoke_tiebreak``: the governance Q a room votes on
-    (story 20). The ballot itself is ``cast_tiebreak_ballot`` → VoteResult."""
-
-    board_id: str
-    ce_id: str
-    tiebreak_q_id: str
-    opened_by: str | None
-    opened_seq: int
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "TiebreakResult":
-        return cls(**d)
-
-
 __all__ = [
     "CLAIM_RECORDED", "CLAIM_REVISED", "OPS_EVENT_TYPES", "TRAY_NAME",
     "SOURCE_TAG", "VOTE_EVENT_TYPES",
@@ -287,6 +266,6 @@ __all__ = [
     "ALLOWED_EVENT_TYPES",
     "now_iso", "slug", "make_board_id", "next_label",
     "BoardRecord", "ClaimProvenance", "ClaimResult", "OpenResult",
-    "AllegationResult", "VoteResult", "TiebreakResult",
+    "AllegationResult", "VoteResult",
     "canonical_provenance", "original_provenance",
 ]

@@ -86,35 +86,33 @@ def test_standing_but_not_refuted(make_env):
     assert m.is_refuted(env.ce) is False
 
 
-def test_one_human_exception_decisive_on_tie(make_env):
-    env = make_env(humans=("human",), mode="participates", facilitator=True)
+def test_single_handle_room_lone_vote_decides(make_env):
+    env = make_env(humans=("human",))
     m, q = env.machine, env.q
     m.cast(q, env.h["human"], "explicit", "stands")
-    m.cast(q, env.f, "explicit", "rebutted")
-    # census {human, facilitator} = 2, 1–1 true tie; the single human's
-    # ballot is decisive → stands wins → the CE refutes.
-    assert tie_exemption_handle(m.state, q) == env.h["human"]
+    # census 1: strict majority already decides; with one handle a true
+    # tie is impossible, so the exemption stays quiet
+    assert tie_exemption_handle(m.state, q) is None
     assert m.is_standing(env.ce) is True
     assert m.is_refuted(env.ce) is True
 
 
-def test_one_human_exception_rebutted_side(make_env):
-    env = make_env(humans=("human",), mode="participates", facilitator=True)
+def test_single_handle_rebutted_vote_defeats(make_env):
+    env = make_env(humans=("human",))
     m, q = env.machine, env.q
     m.cast(q, env.h["human"], "explicit", "rebutted")
-    m.cast(q, env.f, "explicit", "stands")
-    assert tie_exemption_handle(m.state, q) == env.h["human"]
-    # the human's word settles: rebutted → CE does not stand, not refuted
+    assert tie_exemption_handle(m.state, q) is None
+    # the lone handle's word settles it: rebutted → not standing, not refuted
     assert m.is_standing(env.ce) is False
     assert m.is_refuted(env.ce) is False
 
 
 def test_two_human_tie_stays_fails(make_env):
-    env = make_env(humans=("a", "b"), mode="participates", facilitator=True)
+    env = make_env(humans=("a", "b"))
     m, q = env.machine, env.q
     m.cast(q, env.h["a"], "explicit", "stands")
     m.cast(q, env.h["b"], "explicit", "rebutted")
-    # two humans → no exemption; 1–1 tie census 2 (facilitator abstains)
+    # two handles → no exemption; 1–1 tie over census 2 fails
     assert tie_exemption_handle(m.state, q) is None
     assert m.is_refuted(env.ce) is False
     assert m.q_status(q)[0] == "open"

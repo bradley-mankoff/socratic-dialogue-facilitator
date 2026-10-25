@@ -1,9 +1,8 @@
 """SDF-9 test helpers: the Justice arc on the stubbed SDF-5 service.
 
 No pytest import here (mirrors ``tests/sdf5_stubs.py``). One helper builds a
-board with human handles (default four, including a named Socrates player)
-and an optional facilitator; another settles a governance Q by explicit
-votes; the third folds the persisted journal for replay assertions.
+board with the named handles enrolled; another settles a governance Q by
+explicit votes; the third folds the persisted journal for replay assertions.
 """
 
 from __future__ import annotations
@@ -12,24 +11,19 @@ from types import SimpleNamespace
 
 from board.store import JsonlStore
 
-SOCRATES_PLAYER = "Socrates"
-HUMANS = ("Cephalus", "Polemarchus", "Thrasymachus", SOCRATES_PLAYER)
-FACILITATOR = "Daimon"
+HUMANS = ("Cephalus", "Polemarchus", "Thrasymachus")
 CLAIM = "Justice is the advantage of the stronger."
 REVISION = "Justice is the advantage of the stronger, refined."
 
 
-def open_justice(svc, *, mode="participates", facilitator=False,
-                 humans=HUMANS):
-    """Fresh Justice board with the named humans enrolled (and facilitator)."""
-    opened = svc.open_board("Justice", mode=mode)
+def open_justice(svc, *, humans=HUMANS):
+    """Fresh Justice board with the named handles enrolled."""
+    opened = svc.open_board("Justice")
     board_id = opened.board_id
     machine = svc.machine(board_id)
     h = {display: machine.enroll_handle(display) for display in humans}
-    f = (machine.enroll_handle(FACILITATOR, is_facilitator=True)
-         if facilitator else None)
     return SimpleNamespace(service=svc, board_id=board_id, machine=machine,
-                           h=h, f=f)
+                           h=h)
 
 
 def settle_side(machine, q_id, voters, side):
@@ -47,6 +41,6 @@ def reload_state(svc, board_id):
 
 
 __all__ = [
-    "SOCRATES_PLAYER", "HUMANS", "FACILITATOR", "CLAIM", "REVISION",
+    "HUMANS", "CLAIM", "REVISION",
     "open_justice", "settle_side", "reload_state",
 ]

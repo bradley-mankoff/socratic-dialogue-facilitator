@@ -1,11 +1,8 @@
-"""Handle identities: duplicate-display suffixing, provisional binding,
-facilitator eligibility guards."""
+"""Handle identities: duplicate-display suffixing and provisional binding."""
 
 import pytest
 
 from board.machine import (
-    FacilitatorCannotVote,
-    FacilitatorNeverProposes,
     UnknownHandle,
     UnknownQuestion,
 )
@@ -38,30 +35,9 @@ def test_bind_name_renames_provisional(make_env):
     assert m.state.handles[pid2].display == "Adeimantus#2"
 
 
-def test_facilitator_cannot_vote_in_facilitates(make_env):
-    env = make_env(humans=("a", "b"), mode="facilitates", facilitator=True)
-    m, q = env.machine, env.q
-    with pytest.raises(FacilitatorCannotVote):
-        m.cast(q, env.f, "explicit", "stands")
-    with pytest.raises(FacilitatorCannotVote):
-        m.record_ambient(q, env.f, "stands", receive_time=1.0)
-
-
-def test_facilitator_can_vote_in_participates(make_env):
-    env = make_env(humans=("a", "b"), mode="participates", facilitator=True)
-    m, q = env.machine, env.q
-    ballot = m.cast(q, env.f, "explicit", "stands")
-    assert ballot is not None
-    assert m.counted(q, env.f).side == "stands"
-
-
-def test_facilitator_never_proposes_close(make_env):
-    env = make_env(humans=("a", "b"), mode="participates", facilitator=True)
+def test_any_handle_may_propose_close(make_env):
+    env = make_env(humans=("a", "b"))
     m = env.machine
-    with pytest.raises(FacilitatorNeverProposes):
-        m.open_governance_q("close", opened_by=env.f)
-    with pytest.raises(FacilitatorNeverProposes):
-        m.open_governance_q("close", opened_by=env.f)
     qc = m.open_governance_q("close", opened_by=env.h["a"])
     assert m.state.questions[qc].kind == "close"
 
@@ -74,6 +50,6 @@ def test_unknown_handle_and_question(make_env):
     with pytest.raises(UnknownHandle):
         m.cast(env.q, "ghost", "explicit", "stands")
     with pytest.raises(UnknownHandle):
-        m.set_socrates("ghost")
+        m.open_governance_q("close", opened_by="ghost")
     with pytest.raises(UnknownHandle):
         m.bind_name("ghost", "Cephalus")

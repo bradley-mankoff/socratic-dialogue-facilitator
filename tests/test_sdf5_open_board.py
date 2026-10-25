@@ -1,4 +1,4 @@
-"""Board open/create: registry identity, canonical pull, mode per board.
+"""Board open/create: registry identity, canonical pull, medium per board.
 
 The board is keyed by ``(normalize_x(X), label)``; opening is get-or-create
 and never destructive. Canonicals are pulled before anything is written, so a
@@ -71,36 +71,33 @@ def test_open_is_get_or_create_per_key(tmp_path):
     assert len(stub.calls) == 2, "the same board must not re-pull"
 
 
-def test_reopen_ignores_mode_argument(tmp_path):
-    """Mode is chosen once at creation; changing it is governance (SDF-6/8)."""
+def test_reopen_ignores_medium_argument(tmp_path):
+    """Medium is chosen once at creation; changing it is a direct write."""
     service = _service(tmp_path)
-    opened = service.open_board("Justice", "room-a", mode="participates")
-    again = service.open_board("Justice", "room-a", mode="facilitates",
-                              medium="live")
+    opened = service.open_board("Justice", "room-a", medium="async")
+    again = service.open_board("Justice", "room-a", medium="live")
     assert again.created is False
-    assert service.state(opened.board_id).mode == "participates"
     assert service.state(opened.board_id).medium == "async"
-    assert again.view["mode"] == "participates"
+    assert again.view["medium"] == "async"
 
 
-def test_mode_is_stored_per_board(tmp_path):
+def test_medium_is_stored_per_board(tmp_path):
     service = _service(tmp_path)
-    participates = service.open_board("Justice", "room-a",
-                                      mode="participates")
-    facilitates = service.open_board("Justice", "room-b", mode="facilitates")
-    assert participates.record.mode == "participates"
-    assert facilitates.record.mode == "facilitates"
-    assert service.state(participates.board_id).mode == "participates"
-    assert service.state(facilitates.board_id).mode == "facilitates"
-    assert participates.view["mode"] != facilitates.view["mode"]
+    first = service.open_board("Justice", "room-a", medium="async")
+    second = service.open_board("Justice", "room-b", medium="live")
+    assert first.record.medium == "async"
+    assert second.record.medium == "live"
+    assert service.state(first.board_id).medium == "async"
+    assert service.state(second.board_id).medium == "live"
+    assert first.view["medium"] != second.view["medium"]
     payloads = [
-        service.journals.read_all(bid)[0]["payload"]["mode"]
-        for bid in (participates.board_id, facilitates.board_id)
+        service.journals.read_all(bid)[0]["payload"]["medium"]
+        for bid in (first.board_id, second.board_id)
     ]
-    assert payloads == ["participates", "facilitates"]
-    # same X, different mode: two independent boards, one shared cache
-    assert service.canonicals(participates.board_id) == \
-        service.canonicals(facilitates.board_id)
+    assert payloads == ["async", "live"]
+    # same X, different medium: two independent boards, one shared cache
+    assert service.canonicals(first.board_id) == \
+        service.canonicals(second.board_id)
 
 
 def test_invalid_arguments_write_nothing(tmp_path):
@@ -108,8 +105,6 @@ def test_invalid_arguments_write_nothing(tmp_path):
     root = tmp_path / "store"
     service = make_service(root, chain=build_default_chain(stub,
                                                            clock=lambda: DATE))
-    with pytest.raises(ValueError):
-        service.open_board("Justice", "room-a", mode="guided")
     with pytest.raises(ValueError):
         service.open_board("Justice", "room-a", medium="realtime")
     with pytest.raises(ValueError):

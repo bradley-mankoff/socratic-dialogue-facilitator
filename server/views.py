@@ -16,7 +16,6 @@ from __future__ import annotations
 from typing import Any
 
 import board.verdicts as V
-from board.roles import seats_view
 from board.model import BoardState
 from search.model import (
     COUNTEREXAMPLES_SECTION_KIND,
@@ -123,8 +122,9 @@ def tray_view(items: list[dict] | None,
 
     Pure projection of already-persisted rows — verdicts never read it, so
     rendering it can never move a tally. Item dicts carry no ``origin``
-    key and no system type string, keeping the SDF-8 facilitator-blind
-    separation intact. JSON-able by construction.
+    key and no system type string, keeping the SDF-8 system-log
+    separation intact (system lines are never a person's post).
+    JSON-able by construction.
     """
     return {
         "tray": TRAY_NAME,
@@ -140,7 +140,7 @@ def board_view(record, state: BoardState, provenance_map: dict[str, dict],
                tray_items: list[dict] | None = None) -> dict[str, Any]:
     """Whole-board view: header, handles, lineage (v1→vN), questions, defs.
 
-    ``mode``/``medium``/``status`` are read from the live machine state, not
+    ``medium``/``status`` are read from the live machine state, not
     from the registry mirror, so a mid-dialogue toggle is visible immediately.
     """
     nodes = sorted(state.nodes.values(),
@@ -152,7 +152,6 @@ def board_view(record, state: BoardState, provenance_map: dict[str, dict],
         "x": record.x,
         "x_title": state.x_title,
         "label": record.label,
-        "mode": state.mode,
         "medium": state.medium,
         "status": state.status,
         "seq": state.seq,
@@ -165,7 +164,6 @@ def board_view(record, state: BoardState, provenance_map: dict[str, dict],
         "nodes": [node_view(n, provenance_map.get(n.node_id))
                   for n in nodes],
         "questions": [question_view(state, q) for q in questions],
-        "roles": dict(seats_view(state)),
         "canonicals": canonicals_view(snapshot),
         # SDF-16: one on-demand section under two alias keys — never inside
         # "canonicals"; searches[] are web voices, sep[] are philosopher
@@ -184,7 +182,6 @@ def boards_view(records: list) -> list[dict[str, Any]]:
         "x": r.x,
         "x_title": r.x_title,
         "label": r.label,
-        "mode": r.mode,
         "medium": r.medium,
         "status": r.status,
         "created_at": r.created_at,
@@ -224,51 +221,12 @@ def vote_rows(machine, q_id: str) -> list[dict[str, Any]]:
             "channel": b.channel,
             "side": b.side,
             "reason": b.reason,
-            "labeled": bool(b.labeled),
             "receive_time": b.receive_time,
             "seq": b.seq,
             "is_counted": counted_by_handle.get(b.handle_id) == b.ballot_id,
             "withdrawn": bool(b.withdrawn),
         })
     return rows
-
-
-def _tiebreak_view(machine, ce) -> dict[str, Any]:
-    """Tiebreak-invoke governance block for one CE row (story 20).
-
-    ``invoked`` mirrors ``ce.tiebreak_invoked`` (set once, at invocation);
-    ``voter``/``side``/``reason`` describe the one labeled facilitator ballot
-    and stay ``None`` until it is cast.
-    """
-    state = machine.state
-    none_block: dict[str, Any] = {
-        "invoked": False, "q_id": None, "status": None, "outcome": None,
-        "ballot_id": None, "voter": None, "display": None, "side": None,
-        "reason": None, "votes": [],
-    }
-    if not ce.tiebreak_invoked:
-        return none_block
-    tb_q = next(
-        (q for q in state.questions.values()
-         if q.kind == "tiebreak" and q.subject == ce.ce_id), None)
-    if tb_q is None:
-        return none_block
-    ballot = state.ballots.get(ce.tiebreak_ballot_id) \
-        if ce.tiebreak_ballot_id is not None else None
-    voter = ballot.handle_id if ballot is not None else None
-    return {
-        "invoked": True,
-        "q_id": tb_q.q_id,
-        "status": tb_q.status,
-        "outcome": tb_q.outcome,
-        "ballot_id": ce.tiebreak_ballot_id,
-        "voter": voter,
-        "display": (state.handles[voter].display
-                    if voter is not None else None),
-        "side": ballot.side if ballot is not None else None,
-        "reason": ballot.reason if ballot is not None else None,
-        "votes": vote_rows(machine, tb_q.q_id),
-    }
 
 
 def ce_rows(machine, node_id: str) -> list[dict[str, Any]]:
@@ -300,7 +258,6 @@ def ce_rows(machine, node_id: str) -> list[dict[str, Any]]:
             "tie_exemption": V.tie_exemption_handle(state, ce.q_id),
             "decisive_side": V.decisive_side(state, ce.q_id),
             "votes": vote_rows(machine, ce.q_id),
-            "tiebreak": _tiebreak_view(machine, ce),
         })
     return rows
 

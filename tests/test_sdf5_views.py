@@ -36,13 +36,13 @@ def test_board_view_is_json_complete_and_ordered(live):
     ctx = live
     view = ctx.service.view(ctx.board_id)
     assert json.loads(json.dumps(view)) == view
-    for key in ("board_id", "x", "x_title", "label", "mode", "medium",
+    for key in ("board_id", "x", "x_title", "label", "medium",
                 "status", "seq", "handles", "active_node_id", "nodes",
                 "questions", "canonicals", "cache"):
         assert key in view, key
     assert view["board_id"] == ctx.board_id
     assert view["x_title"] == "Justice"
-    assert view["mode"] == "participates" and view["medium"] == "async"
+    assert view["medium"] == "async"
     assert view["status"] == "open"
     assert [n["node_id"] for n in view["nodes"]] == ["n1"]
     assert [qq["q_id"] for qq in view["questions"]] == ["q1"]
@@ -115,14 +115,14 @@ def test_question_view_surfaces_verdict_counts(live):
 def test_governance_question_uses_for_against_vocabulary(sdf5_open):
     ctx = sdf5_open
     machine = ctx.machine
-    q = machine.open_governance_q("mode_switch", subject="facilitates",
-                                 opened_by=ctx.h["Cephalus"])
+    q = machine.open_governance_q("ingress_selection", subject="candidate-x",
+                                  opened_by=ctx.h["Cephalus"])
     machine.cast(q, ctx.h["Cephalus"], "explicit", "for")
     row = [r for r in ctx.service.view(ctx.board_id)["questions"]
            if r["q_id"] == q][0]
-    assert row["kind"] == "mode_switch"
+    assert row["kind"] == "ingress_selection"
     assert row["tally"] == {"for": 1, "against": 0}
-    assert row["subject"] == "facilitates"
+    assert row["subject"] == "candidate-x"
 
 
 def test_canonicals_view_shapes(sdf5_open):
@@ -160,7 +160,7 @@ def test_boards_view_lists_boards_and_survives_a_restart(tmp_path):
     assert [r["label"] for r in rows] == ["room-a", "room-b"]
     assert [r["board_id"] for r in rows] == [a.board_id, b.board_id]
     for row in rows:
-        assert set(row) == {"board_id", "x", "x_title", "label", "mode",
+        assert set(row) == {"board_id", "x", "x_title", "label",
                             "medium", "status", "created_at"}
     assert json.loads(json.dumps(rows)) == rows
     rebuilt = make_service(tmp_path / "store", chain=empty_chain())
@@ -172,26 +172,16 @@ def test_boards_view_lists_boards_and_survives_a_restart(tmp_path):
 def test_sync_registry_only_writes_mirrors(sdf5_open):
     """The registry mirrors can go stale; the view never does.
 
-    ``sync_registry`` is the SDF-6/8 contract: call it after a mode/medium or
+    ``sync_registry`` is the SDF-6/8 contract: call it after a medium or
     close effect and the mirrors catch up. It writes no verdict event and
     touches no other row.
     """
     ctx = sdf5_open
     service, bid, machine = ctx.service, ctx.board_id, ctx.machine
     service.claim_original(bid, THRASYMACHUS, claimant_display="Cephalus")
-    switch = machine.open_governance_q("mode_switch",
-                                       subject="facilitates",
-                                       opened_by=ctx.h["Cephalus"])
-    for who in ("Cephalus", "Polemarchus"):        # 2/3 census: majority
-        machine.cast(switch, ctx.h[who], "explicit", "for")
-    # effect applied on the machine, mirror still stale
-    assert service.state(bid).mode == "facilitates"
-    assert service.view(bid)["mode"] == "facilitates"
-    assert service.board(bid).mode == "participates"
     journal_before = len(service.journals.read_all(bid))
     meta_before = len(service.meta.read_events(bid))
     record = service.sync_registry(bid)
-    assert record.mode == "facilitates"
     assert service.board(bid).to_dict() == record.to_dict()
     assert len(service.journals.read_all(bid)) == journal_before
     assert len(service.meta.read_events(bid)) == meta_before

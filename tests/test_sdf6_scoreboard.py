@@ -1,8 +1,8 @@
-"""AC4 — the live scoreboard shows who voted what, with tiebreak rows.
+"""AC4 — the live scoreboard shows who voted what.
 
 Story 19: every ballot renders with its display and counted-ness, numbers
-match the machine's reads exactly, the tiebreak-invoke governance block is
-embedded per CE, and the whole shape survives a JSON round-trip.
+match the machine's reads exactly, and the whole shape survives a JSON
+round-trip.
 """
 
 import json
@@ -50,63 +50,12 @@ def test_scoreboard_who_voted_what(tmp_path):
     assert votes[0]["reason"] is None
 
 
-def test_scoreboard_includes_tiebreak_row(tmp_path):
-    env = make_svc(tmp_path, mode="facilitates", facilitator=True)
-    service, bid, machine = env.service, env.board_id, env.machine
-    service.cast_vote(bid, env.q, "stands", by_display="Cephalus")
-    service.cast_vote(bid, env.q, "rebutted", by_display="Polemarchus")
-
-    # pre-invoke: the block renders inert
-    pre = service.scoreboard(bid)["ces"][0]["tiebreak"]
-    assert pre == {"invoked": False, "q_id": None, "status": None,
-                   "outcome": None, "ballot_id": None, "voter": None,
-                   "display": None, "side": None, "reason": None,
-                   "votes": []}
-
-    invoked = service.invoke_tiebreak(bid, env.ce, by_display="Cephalus")
-    mid = service.scoreboard(bid)["ces"][0]["tiebreak"]
-    assert mid["invoked"] is True
-    assert mid["q_id"] == invoked.tiebreak_q_id
-    assert mid["status"] == "open" and mid["outcome"] is None
-    assert mid["ballot_id"] is None
-
-    # the room settles the invocation Q on a strict majority of 2 'for'
-    service.cast_vote(bid, invoked.tiebreak_q_id, "for",
-                      by_display="Cephalus")
-    service.cast_vote(bid, invoked.tiebreak_q_id, "for",
-                      by_display="Polemarchus")
-    mid = service.scoreboard(bid)["ces"][0]["tiebreak"]
-    assert (mid["status"], mid["outcome"]) == ("settled", "for")
-    assert [v["side"] for v in mid["votes"]] == ["for", "for"]
-    assert all(v["is_counted"] for v in mid["votes"])
-
-    ballot = service.cast_tiebreak_ballot(
-        bid, env.ce, "the example misapplies the term")
-    post = service.scoreboard(bid)["ces"][0]["tiebreak"]
-    assert post["invoked"] is True
-    assert post["ballot_id"] == ballot.ballot_id
-    assert post["voter"] == ballot.handle_id
-    assert post["display"] == "facilitator"
-    assert post["side"] == "rebutted"
-    assert post["reason"] == "the example misapplies the term"
-    # the labeled ballot also renders in the refutation Q's own votes
-    row = service.scoreboard(bid)["ces"][0]
-    labeled = [v for v in row["votes"] if v["ballot_id"] == ballot.ballot_id]
-    assert len(labeled) == 1
-    assert labeled[0]["labeled"] is True and labeled[0]["is_counted"] is True
-    assert labeled[0]["channel"] == "explicit"
-    # and the flip it bought: 1–2, still not refuted
-    assert row["tally"] == {"stands": 1, "rebutted": 2}
-    assert row["is_standing"] is False
-    assert sb_is_refuted(service, bid) is False
-
-
 def sb_is_refuted(service, bid):
     return service.scoreboard(bid)["is_refuted"]
 
 
 def test_scoreboard_numbers_match_machine(tmp_path):
-    env = make_svc(tmp_path, mode="facilitates", facilitator=True)
+    env = make_svc(tmp_path)
     service, bid, machine = env.service, env.board_id, env.machine
     import board.verdicts as V
     service.cast_vote(bid, env.q, "stands", by_display="Cephalus")

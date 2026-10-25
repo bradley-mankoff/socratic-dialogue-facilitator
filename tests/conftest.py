@@ -15,22 +15,17 @@ CLAIM = "Justice is the advantage of the stronger."
 def make_env():
     """Factory for a fresh in-memory board.
 
-    Enrolls ``humans`` (default h1..h3), optionally a facilitator handle,
-    registers active node ``n1`` and attaches one counterexample ``ce1``
+    Enrolls ``humans`` (default h1..h3), registers active node ``n1``
+    and attaches one counterexample ``ce1``
     with its refutation Q ``q1`` (opened by the first human).
     """
 
-    def _make(humans=("h1", "h2", "h3"), mode="participates",
-              facilitator=False, medium="async"):
-        m = VerdictMachine.in_memory(mode=mode, medium=medium)
+    def _make(humans=("h1", "h2", "h3"), medium="async"):
+        m = VerdictMachine.in_memory(medium=medium)
         h = {name: m.enroll_handle(name) for name in humans}
-        f = None
-        if facilitator:
-            f = m.enroll_handle("facilitator", kind="enrolled",
-                                is_facilitator=True)
         n = m.register_node("n1", CLAIM)
         ce, q = m.open_refutation_q(n, "3a", opened_by=h[humans[0]])
-        return SimpleNamespace(machine=m, h=h, f=f, node=n, ce=ce, q=q)
+        return SimpleNamespace(machine=m, h=h, node=n, ce=ce, q=q)
 
     return _make
 

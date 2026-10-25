@@ -11,42 +11,24 @@ from __future__ import annotations
 from board.model import BoardState, Ballot, sides_for
 
 
-def human_handles(state: BoardState) -> list[str]:
-    """Every handle that is not the facilitator seat, in enrollment order."""
-    return [h.handle_id for h in state.handles.values() if not h.is_facilitator]
-
-
-def _facilitator_handles(state: BoardState) -> list[str]:
-    return [h.handle_id for h in state.handles.values() if h.is_facilitator]
-
-
 def franchise(state: BoardState) -> list[str]:
     """Handles enfranchised right now, in enrollment order.
 
-    Everyone, plus the facilitator seat in participates mode only. This is
-    what a question freezes as its open roster.
+    Everyone: every handle counts the same in every question.
     """
-    return [
-        h.handle_id
-        for h in state.handles.values()
-        if not (h.is_facilitator and state.mode != "participates")
-    ]
+    return [h.handle_id for h in state.handles.values()]
 
 
 def census(state: BoardState, q_id: str) -> frozenset[str]:
-    """Open roster (frozen at Q open, mode-adjusted) UNION every handle with
-    a non-withdrawn, non-tiebreak counted ballot on this Q.
+    """Open roster (frozen at Q open) UNION every handle with
+    a non-withdrawn counted ballot on this Q.
 
-    Late non-voters never enter. The labeled facilitator tiebreak ballot is
-    a tally vote but takes no census seat (the facilitator holds no
-    franchise in facilitates mode).
+    Late non-voters never enter.
     """
     q = state.questions[q_id]
     members = set(q.open_roster)
     for ballot in state.ballots.values():
         if ballot.q_id != q_id or ballot.withdrawn:
-            continue
-        if ballot.labeled:
             continue
         if counted_ballot(state, q_id, ballot.handle_id) is None:
             continue
@@ -58,7 +40,7 @@ def counted_ballot(state: BoardState, q_id: str, handle_id: str) -> Ballot | Non
     """The one ballot that counts for (handle, Q).
 
     Latest EXPLICIT by (receive_time, seq) if any explicit exists, else
-    latest AMBIENT. Withdrawn (mode-switch / retraction) ballots are
+    latest AMBIENT. Withdrawn (retraction) ballots are
     invisible. Returns None when nothing counts.
     """
     explicit: list[Ballot] = []
@@ -134,15 +116,21 @@ def _tie(state: BoardState, q_id: str) -> bool:
 def tie_exemption_handle(state: BoardState, q_id: str) -> str | None:
     """The 1-human exception, scoped to true ties only.
 
-    Active iff the whole board holds exactly ONE human handle
-    (is_facilitator False), that human has a counted ballot on this Q, and
+    Active iff the whole board holds exactly one handle, that handle has a counted ballot on this Q, and
     the top two counts tie. The returned handle's ballot is decisive.
     Shortfalls never qualify.
+
+    Dormant since the sdf-zj6.1 cut removed the facilitator seat: with one
+    handle a true tie is impossible (one counted ballot at most), so this
+    always returns None until a later Spec adds a second voter. The Spec's
+    AI player joins as an ordinary participant marked as the AI; when it
+    lands, tell human handles apart from it here so the exception applies
+    to exactly-one-human boards again.
     """
-    humans = human_handles(state)
-    if len(humans) != 1:
+    handles = franchise(state)
+    if len(handles) != 1:
         return None
-    h = humans[0]
+    h = handles[0]
     if counted_ballot(state, q_id, h) is None:
         return None
     if not _tie(state, q_id):

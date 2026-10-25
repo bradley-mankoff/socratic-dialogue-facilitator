@@ -3,8 +3,8 @@ the canonical cache but not a single bit of verdict state.
 
 The two halves of the criterion are proved against each other: the transport
 call count stays at the two calls of the *first* open (shared cache), while
-each board keeps its own journal, its own node numbering and its own mode
-(independent state). Board identity is ``(normalize_x(X), label)``, so
+each board keeps its own journal, its own node numbering and its own
+medium (independent state). Board identity is ``(normalize_x(X), label)``, so
 "Justice" and "justice" are one X, and two labels are two boards.
 """
 
@@ -125,16 +125,16 @@ def test_verdict_state_is_per_board(two_boards):
         ctx.service.journals.path_for(ctx.b.board_id)
 
 
-def test_mode_is_chosen_per_board_on_the_same_x(two_boards):
+def test_medium_is_chosen_per_board_on_the_same_x(two_boards):
     ctx = two_boards
-    assert ctx.a.record.mode == "participates"
-    quiet = ctx.service.open_board(X_TITLE, "quiet-room", mode="facilitates")
-    assert quiet.record.mode == "facilitates"
-    assert ctx.service.state(ctx.a.board_id).mode == "participates"
-    assert ctx.service.state(quiet.board_id).mode == "facilitates"
-    assert ctx.service.view(quiet.board_id)["mode"] == "facilitates"
-    assert [r.mode for r in ctx.service.list_boards(X_TITLE)] == [
-        "participates", "participates", "facilitates"]
+    assert ctx.a.record.medium == "async"
+    quiet = ctx.service.open_board(X_TITLE, "quiet-room", medium="live")
+    assert quiet.record.medium == "live"
+    assert ctx.service.state(ctx.a.board_id).medium == "async"
+    assert ctx.service.state(quiet.board_id).medium == "live"
+    assert ctx.service.view(quiet.board_id)["medium"] == "live"
+    assert [r.medium for r in ctx.service.list_boards(X_TITLE)] == [
+        "async", "async", "live"]
     # same X, three boards, still one canonical pull
     assert len(ctx.stub.calls) == 2
 

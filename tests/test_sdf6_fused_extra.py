@@ -43,16 +43,10 @@ def test_fused_ballots_on_superseded_node_are_frozen(tmp_path):
 
 
 def test_fused_scoreboard_survives_reopen(tmp_path):
-    env = make_svc(tmp_path, mode="facilitates", facilitator=True)
+    env = make_svc(tmp_path)
     service, bid = env.service, env.board_id
     service.cast_vote(bid, env.q, "stands", by_display="Cephalus")
     service.cast_vote(bid, env.q, "rebutted", by_display="Polemarchus")
-    invoked = service.invoke_tiebreak(bid, env.ce, by_display="Cephalus")
-    service.cast_vote(bid, invoked.tiebreak_q_id, "for",
-                      by_display="Cephalus")
-    service.cast_vote(bid, invoked.tiebreak_q_id, "for",
-                      by_display="Polemarchus")
-    service.cast_tiebreak_ballot(bid, env.ce, reason="def still has force")
     before = service.scoreboard(bid)
     assert json.loads(json.dumps(before)) == before
     reopened = make_service(tmp_path, chain=justice_chain(),
@@ -61,8 +55,6 @@ def test_fused_scoreboard_survives_reopen(tmp_path):
     # vote ledger is journal truth too: same ballots, same counted flags
     assert (reopened.scoreboard(bid)["ces"][0]["votes"]
             == before["ces"][0]["votes"])
-    assert (reopened.scoreboard(bid)["ces"][0]["tiebreak"]
-            == before["ces"][0]["tiebreak"])
 
 
 def test_fused_vote_rows_unknown_q_renders_empty(tmp_path):

@@ -87,8 +87,9 @@ def test_registry_persists_atomically_and_reloads(tmp_path):
     path = registry_path(tmp_path / "store")
     registry = BoardRegistry(path)
     record = registry.reserve(x="Justice", x_title="Justice",
-                              label="room-a", mode="facilitates")
+                              label="room-a", medium="live")
     assert record.status == "open" and record.board_id
+    assert record.medium == "live"
     assert not list(path.parent.glob("*.tmp")), "temp file left behind"
 
     reloaded = BoardRegistry(path)
@@ -111,7 +112,7 @@ def test_registry_rejects_duplicate_label_and_bogus_mirrors(tmp_path):
         registry.mark(board_id, active_node_id="n1")   # verdict state is not a mirror
     with pytest.raises(ValueError):
         registry.mark(board_id, bogus="x")
-    assert registry.mark(board_id, mode="facilitates").mode == "facilitates"
+    assert registry.mark(board_id, medium="live").medium == "live"
 
 
 def test_canonical_store_first_write_wins(tmp_path):

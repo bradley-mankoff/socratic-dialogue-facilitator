@@ -3,14 +3,8 @@ Q freezes; tray + canvas snapshots; terminality survives reload."""
 
 import pytest
 
-from board.machine import BoardClosed, FacilitatorNeverProposes
+from board.machine import BoardClosed
 from board.store import JsonlStore
-
-
-def test_facilitator_never_proposes_close(make_env):
-    env = make_env(humans=("a", "b"), mode="participates", facilitator=True)
-    with pytest.raises(FacilitatorNeverProposes):
-        env.machine.open_governance_q("close", opened_by=env.f)
 
 
 def _close_by_vote(m, opened_by, voters):
@@ -109,7 +103,7 @@ def _make_closed_board(store, create=True):
     if not create:
         return m
     m.create_board("board-close", "Justice (Republic Book I)",
-                   "participates", "async")
+                   "async")
     h1 = m.enroll_handle("h1")
     h2 = m.enroll_handle("h2")
     n1 = m.register_node("n1", "Justice is the advantage of the stronger.")

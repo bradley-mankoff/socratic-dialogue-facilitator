@@ -5,8 +5,7 @@ Thrasymachus claims; Cephalus alleges the 3a erring-ruler; ambient and
 explicit ballots dedupe to one counted ballot each; the tie stands
 not-refuted; re-calls flip refuted/un-refuted; the scoreboard matches the
 machine; ``revise`` freezes the question and hands SDF-7 a correct tray.
-Then the facilitates tiebreak horn: invoke, settle ``for``, one labeled
-ballot — and the whole journal replays byte-identical after a reopen.
+Then durability: the whole journal replays byte-identical after a reopen.
 """
 
 import json
@@ -120,35 +119,21 @@ def test_erring_ruler_refutes_and_unrefutes_through_the_service(tmp_path):
     del first, shadow, voted2, back
 
 
-def test_justice_tiebreak_horn_and_durability(tmp_path):
-    env = make_svc(tmp_path, mode="facilitates", facilitator=True,
-                   label="sdf6-horn", allege=False)
+def test_justice_votes_and_durability(tmp_path):
+    env = make_svc(tmp_path, label="sdf6-horn", allege=False)
     service, bid, machine = env.service, env.board_id, env.machine
     cephalus, polemarchus, thrasymachus = (
         env.h["Cephalus"], env.h["Polemarchus"], env.h["Thrasymachus"])
 
     alleged = service.allege(bid, "3a", by_display="Cephalus")
     ref_q = alleged.q_id
-    # 1–1 human tie on the CE's refutation Q (census: the three humans)
+    # 1–1 tie on the CE's refutation Q (census: the three handles)
     service.cast_vote(bid, ref_q, "stands", by_display="Polemarchus")
     service.cast_vote(bid, ref_q, "rebutted", by_display="Thrasymachus")
     assert machine.is_standing(alleged.ce_id) is True
     assert machine.is_refuted(alleged.ce_id) is False
 
-    # story 20 — invoke, settle the invocation 'for', land the ballot
-    invoked = service.invoke_tiebreak(bid, alleged.ce_id,
-                                      by_display="Cephalus")
-    service.cast_vote(bid, invoked.tiebreak_q_id, "for",
-                      by_display="Cephalus")
-    service.cast_vote(bid, invoked.tiebreak_q_id, "for",
-                      by_display="Polemarchus")
-    assert machine.q_status(invoked.tiebreak_q_id) == ("settled", "for")
-    ballot = service.cast_tiebreak_ballot(
-        bid, alleged.ce_id, "the example misapplies the term")
-    assert machine.standing_counts(alleged.ce_id) == (1, 2)
-    assert machine.is_standing(alleged.ce_id) is False
-    assert machine.is_refuted(alleged.ce_id) is False, \
-        "still-not-refuted stays so"
+    # the verdict is a live predicate: refutation Qs never settle
     assert machine.q_status(ref_q) == ("open", None), \
         "refutation Qs never settle; the verdict is a live predicate"
 
@@ -156,16 +141,12 @@ def test_justice_tiebreak_horn_and_durability(tmp_path):
     events = service.vote_events(bid)
     assert [e["type"] for e in events] == [
         "ballot_cast", "ballot_cast",                    # refutation 1–1
-        "ballot_cast", "ballot_cast",                    # invocation 2x for
-        "tiebreak_ballot_cast",                          # the labeled ballot
     ]
-    assert events[-1]["payload"]["reason"] == "the example misapplies the term"
     assert all(e["type"] in VOTE_EVENT_TYPES for e in events)
 
-    # story 19 — scoreboard with the invoked tiebreak, before reopening
+    # story 19 — scoreboard, before reopening
     sb = service.scoreboard(bid)
-    assert sb["ces"][0]["tiebreak"]["invoked"] is True
-    assert sb["ces"][0]["tiebreak"]["ballot_id"] == ballot.ballot_id
+    assert sb["ces"][0]["tally"] == {"stands": 1, "rebutted": 1}
 
     # durability — reopen the same data root and compare everything
     state = machine.state

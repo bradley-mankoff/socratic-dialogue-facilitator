@@ -6,45 +6,29 @@ from board.verdicts import census, governance_passed, is_refuted
 
 
 def _scripted_board(store):
-    """The §8 scripted scenario: enrolls, node, 2 CEs (1 attached), mixed
-    ambient+explicit casts, re-vote, medium toggle, mode switches,
-    tiebreak, close."""
+    """The §8 scripted scenario: enrolls, node, 1 CE attached, mixed
+    ambient+explicit casts, re-vote, medium toggle, ingress vote, close."""
     m = VerdictMachine(store, "b1")
-    m.create_board("b1", "Justice (Republic Book I)", "participates", "async")
+    m.create_board("b1", "Justice (Republic Book I)", "async")
     h1 = m.enroll_handle("h1")
     h2 = m.enroll_handle("h2")
     h3 = m.enroll_handle("h3")
-    f1 = m.enroll_handle("facilitator", is_facilitator=True)
     n1 = m.register_node("n1", "Justice is the advantage of the stronger.")
     ce1, q1 = m.open_refutation_q(n1, "3a", opened_by=h1)
     m.cast(q1, h1, "explicit", "stands")
     m.cast(q1, h2, "explicit", "stands")
-    m.record_ambient(q1, f1, "stands")
     m.record_ambient(q1, h3, "rebutted")
     m.cast(q1, h1, "explicit", "rebutted")          # re-vote
     m.toggle_medium("live")
-    m.set_socrates(h1)
-    q2 = m.open_governance_q("mode_switch", subject="facilitates",
+    q2 = m.open_governance_q("ingress_selection", subject="x",
                              opened_by=h1)
-    for who in (h1, h2, h3):
+    for who in (h1, h2):
         m.cast(q2, who, "explicit", "for")
-    q3 = m.open_governance_q("mode_switch", subject="participates",
-                             opened_by=h1)
-    for who in (h1, h2):
-        m.cast(q3, who, "explicit", "for")
-    m.cast(q1, f1, "explicit", "stands")            # re-eligible ballot
-    q4 = m.open_governance_q("mode_switch", subject="facilitates",
-                             opened_by=h1)
-    for who in (h1, h2, h3):
-        m.cast(q4, who, "explicit", "for")
-    q5 = m.open_governance_q("tiebreak", subject=ce1, opened_by=h1)
-    for who in (h1, h2):
-        m.cast(q5, who, "explicit", "for")
-    m.tiebreak_ballot(ce1, "the example misapplies the definition")
+    assert governance_passed(m.state, q2) == "for"
     qc = m.open_governance_q("close", opened_by=h1)
     for who in (h1, h2):
         m.cast(qc, who, "explicit", "for")
-    return m, dict(h1=h1, h2=h2, h3=h3, f1=f1, n1=n1, ce1=ce1, q1=q1)
+    return m, dict(h1=h1, h2=h2, h3=h3, n1=n1, ce1=ce1, q1=q1)
 
 
 def test_reload_after_every_mutation(tmp_path):
@@ -66,22 +50,19 @@ def test_reload_after_every_mutation_loop(tmp_path):
     to an identical BoardState (includes all consequence events)."""
     store = JsonlStore(home=tmp_path)
     m = VerdictMachine(store, "b1")
-    m.create_board("b1", "Justice (Republic Book I)", "participates", "async")
+    m.create_board("b1", "Justice (Republic Book I)", "async")
     h1 = m.enroll_handle("h1")
     h2 = m.enroll_handle("h2")
     h3 = m.enroll_handle("h3")
-    f1 = m.enroll_handle("facilitator", is_facilitator=True)
     n1 = m.register_node("n1", "Justice is the advantage of the stronger.")
     ce1, q1 = m.open_refutation_q(n1, "3a", opened_by=h1)
     actions = [
         lambda: m.cast(q1, h1, "explicit", "stands"),
         lambda: m.cast(q1, h2, "explicit", "stands"),
-        lambda: m.record_ambient(q1, f1, "stands"),
         lambda: m.record_ambient(q1, h3, "rebutted"),
         lambda: m.cast(q1, h1, "explicit", "rebutted"),   # re-vote
         lambda: m.toggle_medium("live"),
-        lambda: m.set_socrates(h1),
-        lambda: m.open_governance_q("mode_switch", subject="facilitates",
+        lambda: m.open_governance_q("ingress_selection", subject="x",
                                     opened_by=h1),
         lambda: m.cast(q1, h1, "explicit", "stands"),     # refused? no — open
     ]
@@ -89,9 +70,9 @@ def test_reload_after_every_mutation_loop(tmp_path):
         act()
         assert store.load_state("b1") == m.state
     # governance settlement fires consequence events — still identical fold
-    q2 = m.open_governance_q("mode_switch", subject="facilitates",
+    q2 = m.open_governance_q("ingress_selection", subject="y",
                              opened_by=h1)
-    for who in (h1, h2, h3):
+    for who in (h1, h2):
         m.cast(q2, who, "explicit", "for")
     assert store.load_state("b1") == m.state
 
@@ -125,13 +106,12 @@ def test_one_line_per_mutation(tmp_path):
     m.enroll_handle("h2")
     n1 = m.register_node("n1", "a claim")
     m.open_refutation_q(n1, "3a", opened_by="h1")
-    m.set_socrates("h1")
     m.toggle_medium("live")
     events = store.read_all("b3")
-    assert len(events) == 7                 # seven mutations → seven lines
+    assert len(events) == 6                 # six mutations → six lines
     assert [e["type"] for e in events] == [
         "board_created", "handle_enrolled", "handle_enrolled",
-        "node_registered", "q_opened", "socrates_set", "medium_toggled",
+        "node_registered", "q_opened", "medium_toggled",
     ]
     # consequence events are journaled too: a settling cast adds q_settled
     q2 = m.open_governance_q("ingress_selection", subject="x", opened_by="h1")

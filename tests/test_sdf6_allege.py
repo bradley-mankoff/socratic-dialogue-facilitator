@@ -125,5 +125,5 @@ def test_allege_leaves_registry_mirrors_untouched(tmp_path):
     record = env.service.board(env.board_id)
     env.service.allege(env.board_id, "3a", by_display="Cephalus")
     after = env.service.board(env.board_id)
-    assert (after.mode, after.medium, after.status) \
-        == (record.mode, record.medium, record.status)
+    assert (after.medium, after.status) \
+        == (record.medium, record.status)

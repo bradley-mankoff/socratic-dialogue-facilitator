@@ -12,7 +12,6 @@ import json
 import pytest
 
 from board.machine import (
-    FacilitatorCannotVote,
     NodeFrozen,
     QNotOpen,
     SideMismatch,
@@ -136,8 +135,7 @@ def test_majority_of_frozen_census_refutes(tmp_path):
 
 
 def test_two_human_tie_stays_not_refuted(tmp_path):
-    env = make_svc(tmp_path, humans=("Cephalus", "Polemarchus"),
-                   facilitator=False)
+    env = make_svc(tmp_path, humans=("Cephalus", "Polemarchus"))
     service, bid, machine = env.service, env.board_id, env.machine
     service.cast_vote(bid, env.q, "stands", by_display="Cephalus")
     service.cast_vote(bid, env.q, "rebutted", by_display="Polemarchus")
@@ -153,32 +151,22 @@ def test_two_human_tie_stays_not_refuted(tmp_path):
     assert row["decisive_side"] is None
 
 
-def test_one_human_room_tie_decided_by_exempt_human(tmp_path):
+def test_single_handle_room_lone_vote_decides(tmp_path):
     env = make_svc(tmp_path, humans=("Thrasymachus",),
-                   claimant="Thrasymachus", facilitator=True,
-                   mode="participates", allege=False)
+                   claimant="Thrasymachus", allege=False)
     service, bid, machine = env.service, env.board_id, env.machine
     alleged = service.allege(bid, "3a", by_display="Thrasymachus")
     human = env.h["Thrasymachus"]
-    # census {human, facilitator}: 1–1 true tie → the 1-human exemption
+    # census 1: the lone handle's stands vote refutes by strict majority
     service.cast_vote(bid, alleged.q_id, "stands", handle_id=human)
-    service.cast_vote(bid, alleged.q_id, "rebutted", handle_id=env.f)
     row = service.scoreboard(bid)["ces"][0]
-    assert row["tie_exemption"] == human
-    assert row["decisive_side"] == "stands"
+    assert row["tie_exemption"] is None, "one handle cannot tie"
+    assert row["decisive_side"] is None
     assert machine.is_refuted(alleged.ce_id) is True
 
-    # the same human's word flips it — but only while the tie is true:
-    # 0–2 after a bare human re-vote is no tie, so the exemption goes quiet
+    # the same handle's word flips it: rebutted defeats the CE
     service.cast_vote(bid, alleged.q_id, "rebutted", handle_id=human)
     row = service.scoreboard(bid)["ces"][0]
-    assert row["tie_exemption"] is None, "0–2 is no tie; the word is inert"
-    assert machine.is_refuted(alleged.ce_id) is False
-    # restore the tie with the facilitator on the other side: the human's
-    # counted ballot ('rebutted') is again decisive → stays not-refuted
-    service.cast_vote(bid, alleged.q_id, "stands", handle_id=env.f)
-    row = service.scoreboard(bid)["ces"][0]
-    assert row["decisive_side"] == "rebutted"
     assert machine.is_refuted(alleged.ce_id) is False
 
 
@@ -258,11 +246,9 @@ def test_frozen_node_and_frozen_q_refuse_votes(tmp_path):
     assert result.node_id == revised.node_id
 
 
-def test_facilitator_and_side_vocabulary_guards(tmp_path):
-    env = make_svc(tmp_path, mode="facilitates", facilitator=True)
+def test_side_vocabulary_guards(tmp_path):
+    env = make_svc(tmp_path)
     service, bid, machine = env.service, env.board_id, env.machine
-    with pytest.raises(FacilitatorCannotVote):
-        service.cast_vote(bid, env.q, "stands", handle_id=env.f)
     with pytest.raises(SideMismatch):
         service.cast_vote(bid, env.q, "for", by_display="Cephalus")
     with pytest.raises(UnknownQuestion):

@@ -8,7 +8,7 @@ store/registry.json                    boards + counter (small, atomic rewrite)
 store/canonicals/<slug(x_norm)>.json   one ChainResult.to_dict() per X
 store/<board_id>/journal.jsonl         SDF-2 verdict journal (machine-owned)
 store/<board_id>/meta.jsonl            SDF-5 sidecar (server-owned)
-store/<board_id>/system.jsonl          SDF-8 facilitator-blind system log
+store/<board_id>/system.jsonl          SDF-8 system log (never shown as a person's post)
 ````
 
 Journals and sidecars share a board directory but never a file. That
@@ -17,7 +17,7 @@ types, so a single foreign line in ``journal.jsonl`` would permanently break
 replay and SDF-18 resume. ``MetaLog`` and ``SystemLog`` therefore subclass
 :class:`JsonlStore` (identical fsync-per-append durability and torn-tail
 repair) with different filenames rather than writing into the journal. The
-system log is never rendered as a facilitator contribution (SDF-10 renders
+system log is never rendered as a person's post (SDF-10 renders
 it as system lines via ``BoardService.read_system_log``).
 """
 
@@ -47,7 +47,7 @@ REGISTRY_FILENAME = "registry.json"
 REGISTRY_VERSION = 1
 DEFAULT_ROOT = Path("store")
 CANONICALS_DIRNAME = "canonicals"
-ALLOWED_MIRROR_FIELDS = ("mode", "medium", "status")
+ALLOWED_MIRROR_FIELDS = ("medium", "status")
 
 # SDF-8 system-log event types (the only shapes ``SystemLog`` accepts).
 GOVERNANCE_OPENED = "governance_opened"
@@ -156,7 +156,6 @@ class BoardRegistry:
     # -- writes --------------------------------------------------------------
 
     def reserve(self, *, x: str, x_title: str | None = None, label: str,
-                mode: str = "participates",
                 medium: str = "async") -> BoardRecord:
         """Mint and durably register a new board. Raises ``DuplicateLabel``
         when the ``(X, label)`` key is already taken."""
@@ -170,7 +169,6 @@ class BoardRegistry:
             x_norm=xn,
             x_title=(x_title if x_title is not None else str(x).strip()),
             label=label,
-            mode=mode,
             medium=medium,
             status="open",
             created_at=now_iso(),
@@ -180,7 +178,7 @@ class BoardRegistry:
         return record
 
     def mark(self, board_id: str, **fields) -> BoardRecord:
-        """Mirror machine state onto the row. Only mode/medium/status."""
+        """Mirror machine state onto the row. Only medium/status."""
         record = self.boards.get(board_id)
         if record is None:
             raise UnknownBoard(f"unknown board: {board_id}")
@@ -366,7 +364,7 @@ class MetaLog(_EventLog):
 
 
 class SystemLog(_EventLog):
-    """Append-only facilitator-blind system log of governance events (SDF-8)
+    """Append-only system log of governance events (SDF-8)
     plus carry-tray resolutions (SDF-7).
 
     A fourth durable home beside ``journal.jsonl`` and ``meta.jsonl``: same
@@ -374,8 +372,8 @@ class SystemLog(_EventLog):
     own filename and its own per-board ``seq``. The machine never reads it;
     the service never writes the journal. Entries carry question ids, move
     subjects, outcomes and tallies only — never prose, never a speaker
-    display — so nothing in it can be rendered as a facilitator
-    contribution. SDF-10 renders it distinctly through
+    display — so nothing in it can be rendered as a person's post.
+    SDF-10 renders it distinctly through
     :meth:`server.service.BoardService.read_system_log`.
     """
 

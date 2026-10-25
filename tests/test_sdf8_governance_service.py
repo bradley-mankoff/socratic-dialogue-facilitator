@@ -14,12 +14,10 @@ from board.machine import (
     BoardClosed,
     SideMismatch,
     UnknownHandle,
-    UnknownNode,
     UnknownQuestion,
 )
 from server.errors import (
     GovernanceAlreadyOpen,
-    GovernanceNoOp,
     NotAGovernanceQuestion,
 )
 from server.store import GOVERNANCE_OPENED, GOVERNANCE_SETTLED
@@ -29,21 +27,18 @@ HANDLES = ("Cephalus", "Polemarchus", "Thrasymachus", "Cleitophon")
 VOTERS = ("Cephalus", "Polemarchus", "Thrasymachus")
 
 
-def governance_board(root, *, mode="participates", humans=HANDLES,
-                     facilitator=True, claim=True):
+def governance_board(root, *, humans=HANDLES, claim=True):
     """Board on ``root`` with handles enrolled and (optionally) a claim."""
     svc = make_service(root)
-    opened = svc.open_board(JUSTICE, pull_canonicals=False, mode=mode)
+    opened = svc.open_board(JUSTICE, pull_canonicals=False)
     board_id = opened.board_id
     machine = svc.machine(board_id)
     h = {name: machine.enroll_handle(name) for name in humans}
-    f = (machine.enroll_handle("daimon", is_facilitator=True)
-         if facilitator else None)
     if claim:
         svc.claim_original(board_id, THRASYMACHUS,
                            claimant_display=humans[0])
     return SimpleNamespace(service=svc, board_id=board_id, machine=machine,
-                           h=h, f=f)
+                           h=h)
 
 
 def _vote(svc, env, q_id, side):
@@ -55,15 +50,9 @@ def _open_move(svc, env, kind):
     h1 = env.h["Cephalus"]
     if kind == "close":
         return svc.propose_close(env.board_id, opened_by=h1)
-    if kind == "mode_switch":
-        return svc.propose_mode_switch(env.board_id, "facilitates",
-                                       opened_by=h1)
-    if kind == "socrates_swap":
-        return svc.propose_socrates_swap(env.board_id, env.h["Polemarchus"],
-                                         opened_by=h1)
-    if kind == "active_claim_switch":
-        return svc.propose_active_claim_switch(env.board_id, "n1",
-                                               opened_by=h1)
+    if kind == "ingress_selection":
+        return svc.propose_ingress_selection(env.board_id, "candidate-a",
+                                             opened_by=h1)
     raise AssertionError(kind)
 
 
@@ -74,119 +63,7 @@ def _settled_row(svc, board_id, q_id):
     return rows[0]
 
 
-# -- AC1: each move passes by majority and logs as a system event ----------
-
-
-def test_mode_switch_settles_and_applies_with_withdrawal(tmp_path):
-    env = governance_board(tmp_path)
-    svc, bid, m = env.service, env.board_id, env.machine
-    h = env.h
-
-    # a facilitator ballot on an OPEN refutation Q must be withdrawn when
-    # the room leaves participates mode
-    ce, qref = m.open_refutation_q("n1", "3a", opened_by=h["Cephalus"])
-    svc.cast_vote(bid, qref, "stands", handle_id=env.f)
-    svc.cast_vote(bid, qref, "rebutted", handle_id=h["Cephalus"])
-    assert env.f in m.census(qref)
-
-    ingress = svc.propose_ingress_selection(bid, "candidate-x",
-                                            opened_by=h["Cephalus"])
-    _vote(svc, env, ingress, "for")
-    assert m.q_status(ingress) == ("settled", "for")   # history to keep
-
-    q = svc.propose_mode_switch(bid, "facilitates", opened_by=h["Cephalus"])
-    _vote(svc, env, q, "for")
-
-    assert m.q_status(q) == ("settled", "for")
-    assert m.state.mode == "facilitates"
-    assert svc.board(bid).mode == "facilitates"        # registry mirror
-    assert m.counted(qref, env.f) is None              # withdrawn
-    assert env.f not in m.census(qref)
-    applied = [e for e in m.events if e["type"] == "mode_switch_applied"]
-    assert applied and applied[-1]["payload"]["withdrawn_ballot_ids"]
-    assert m.q_status(ingress) == ("settled", "for")   # settled untouched
-
-    opened = svc.read_system_log(bid, GOVERNANCE_OPENED)
-    assert [e["payload"]["q_id"] for e in opened] == [ingress, q]
-    row = _settled_row(svc, bid, q)
-    assert row["origin"] == "system"
-    assert row["kind"] == "mode_switch"
-    assert row["subject"] == "facilitates"
-    assert row["outcome"] == "for"
-    assert row["tally"] == {"for": 3, "against": 0}
-    assert row["census_size"] == 5
-    status = svc.governance_status(bid, q)
-    assert status["status"] == "settled"
-    assert status["tally"] == {"for": 3, "against": 0}
-
-
-def test_rejected_mode_switch_logs_against_and_changes_nothing(tmp_path):
-    env = governance_board(tmp_path)
-    svc, bid, m = env.service, env.board_id, env.machine
-    q = svc.propose_mode_switch(bid, "facilitates", opened_by=env.h["Cephalus"])
-    _vote(svc, env, q, "against")
-    assert m.q_status(q) == ("settled", "against")
-    assert m.state.mode == "participates"
-    assert svc.board(bid).mode == "participates"
-    assert not [e for e in m.events if e["type"] == "mode_switch_applied"]
-    row = _settled_row(svc, bid, q)
-    assert row["outcome"] == "against"
-    assert row["tally"] == {"for": 0, "against": 3}
-
-
-def test_socrates_swap_records_mandate_and_applies_seat(tmp_path):
-    env = governance_board(tmp_path)
-    svc, bid, m = env.service, env.board_id, env.machine
-    m.set_socrates(env.h["Cephalus"])
-    q = svc.propose_socrates_swap(bid, env.h["Polemarchus"],
-                                  opened_by=env.h["Cephalus"])
-    _vote(svc, env, q, "for")
-    assert m.q_status(q) == ("settled", "for")
-    # SDF-9 supersedes the SDF-8 seat-untouched pin: settled swaps apply now.
-    assert m.state.socrates_handle_id == env.h["Polemarchus"]
-    mandate = svc.mandate_for(bid, "socrates_swap")
-    assert mandate["target"] == env.h["Polemarchus"]
-    assert mandate["q_id"] == q
-    assert _settled_row(svc, bid, q)["subject"] == env.h["Polemarchus"]
-
-
-def test_later_rejected_swap_does_not_revoke_live_mandate(tmp_path):
-    env = governance_board(tmp_path)
-    svc, bid, m = env.service, env.board_id, env.machine
-    first = svc.propose_socrates_swap(bid, env.h["Polemarchus"],
-                                      opened_by=env.h["Cephalus"])
-    _vote(svc, env, first, "for")
-    second = svc.propose_socrates_swap(bid, env.h["Thrasymachus"],
-                                       opened_by=env.h["Cephalus"])
-    _vote(svc, env, second, "against")
-    assert m.q_status(second) == ("settled", "against")
-    mandate = svc.mandate_for(bid, "socrates_swap")
-    assert mandate["target"] == env.h["Polemarchus"]
-    assert mandate["q_id"] == first
-
-
-def test_active_claim_switch_records_and_reactivates(tmp_path):
-    env = governance_board(tmp_path)
-    svc, bid, m = env.service, env.board_id, env.machine
-    svc.revise(bid, "Justice is the interest of the stronger (v2).",
-               claimant_display="Cephalus")
-    assert m.state.active_node_id == "n2"
-
-    q = svc.propose_active_claim_switch(bid, "n1",
-                                        opened_by=env.h["Cephalus"])
-    _vote(svc, env, q, "for")
-    assert m.q_status(q) == ("settled", "for")
-    assert m.state.active_node_id == "n1"          # applied on settle (SDF-9)
-    mandate = svc.mandate_for(bid, "active_claim_switch")
-    assert mandate["target"] == "n1"
-    assert mandate["q_id"] == q
-
-    with pytest.raises(GovernanceNoOp):
-        svc.propose_active_claim_switch(bid, "n1",
-                                        opened_by=env.h["Cephalus"])
-    with pytest.raises(UnknownNode):
-        svc.propose_active_claim_switch(bid, "n9",
-                                        opened_by=env.h["Cephalus"])
+# -- AC1: ingress passes by majority and logs as a system event ------------
 
 
 def test_ingress_selection_multicast_and_mandate(tmp_path):
@@ -212,42 +89,35 @@ def test_ingress_selection_multicast_and_mandate(tmp_path):
     assert mandate["consumer"] == "ingress"
 
 
-def test_majority_boundaries_and_tie_exemption(tmp_path):
+def test_majority_boundaries_and_single_handle(tmp_path):
     env = governance_board(tmp_path / "majority")
     svc, bid, m = env.service, env.board_id, env.machine
     h = env.h
     q = svc.propose_ingress_selection(bid, "cand", opened_by=h["Cephalus"])
     svc.cast_vote(bid, q, "for", handle_id=h["Cephalus"])
-    assert m.q_status(q) == ("open", None)          # 1/5
+    assert m.q_status(q) == ("open", None)          # 1/4
     svc.cast_vote(bid, q, "for", handle_id=h["Polemarchus"])
-    assert m.q_status(q) == ("open", None)          # 2/5: 4 not > 5
+    assert m.q_status(q) == ("open", None)          # 2/4: 4 not > 4
     assert svc.read_system_log(bid, GOVERNANCE_SETTLED) == []
 
     svc.cast_vote(bid, q, "for", handle_id=h["Thrasymachus"])
-    assert m.q_status(q) == ("settled", "for")      # 3/5: 6 > 5
+    assert m.q_status(q) == ("settled", "for")      # 3/4: 6 > 4
     assert len(svc.read_system_log(bid, GOVERNANCE_SETTLED)) == 1
 
-    # 1-human board: a 1-1 true tie is decided by the single human's side
-    env1 = governance_board(tmp_path / "tie", humans=("Solo",),
-                            facilitator=True)
+    # 1-handle board: the lone handle's vote settles at once (census 1)
+    env1 = governance_board(tmp_path / "single", humans=("Solo",))
     svc1, bid1, m1 = env1.service, env1.board_id, env1.machine
     q1 = svc1.propose_ingress_selection(bid1, "cand",
                                         opened_by=env1.h["Solo"])
     svc1.cast_vote(bid1, q1, "for", handle_id=env1.h["Solo"])
-    assert m1.q_status(q1) == ("open", None)        # 1 for / census 2
-    svc1.cast_vote(bid1, q1, "against", handle_id=env1.f)
-    assert m1.q_status(q1) == ("settled", "for")    # exemption
+    assert m1.q_status(q1) == ("settled", "for")
     assert svc1.read_system_log(bid1, GOVERNANCE_SETTLED)
 
 
-@pytest.mark.parametrize("kind", ["close", "mode_switch", "socrates_swap",
-                                  "active_claim_switch"])
+@pytest.mark.parametrize("kind", ["close", "ingress_selection"])
 def test_duplicate_open_refused_per_kind_and_slot_freed(tmp_path, kind):
     env = governance_board(tmp_path)
     svc, m = env.service, env.machine
-    if kind == "active_claim_switch":
-        svc.revise(env.board_id, "Justice is the stronger's advantage.",
-                   claimant_display="Cephalus")
     first = _open_move(svc, env, kind)
     with pytest.raises(GovernanceAlreadyOpen) as exc:
         _open_move(svc, env, kind)
@@ -327,7 +197,7 @@ def test_close_freezes_tallies_snapshots_tray_and_ends_input(tmp_path):
     row = _settled_row(svc, bid, qc)
     assert row["outcome"] == "for"
     assert row["tally"] == {"for": 3, "against": 0}
-    assert row["census_size"] == 5
+    assert row["census_size"] == 4
     assert row["carried_unresolved"] == m.state.carried_unresolved
     assert row["closed_seq"] == m.state.canvas["closed_seq"]
     assert svc.board(bid).status == "closed"        # registry mirror
@@ -345,13 +215,6 @@ def test_close_freezes_tallies_snapshots_tray_and_ends_input(tmp_path):
         svc.force_settle(bid, q3)
     with pytest.raises(BoardClosed):
         svc.propose_close(bid, opened_by=h["Cephalus"])
-    with pytest.raises(BoardClosed):
-        svc.propose_mode_switch(bid, "facilitates", opened_by=h["Cephalus"])
-    with pytest.raises(BoardClosed):
-        svc.propose_socrates_swap(bid, h["Polemarchus"],
-                                  opened_by=h["Cephalus"])
-    with pytest.raises(BoardClosed):
-        svc.propose_active_claim_switch(bid, "n1", opened_by=h["Cephalus"])
     with pytest.raises(BoardClosed):
         svc.propose_ingress_selection(bid, "cand", opened_by=h["Cephalus"])
     with pytest.raises(BoardClosed):
