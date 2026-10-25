@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -306,6 +307,12 @@ def _token_from(query: dict, headers) -> str:
 def make_handler(service):
     """Build a stdlib request-handler class bound to one ``BoardService``."""
     store = SymposiumStore(service.root)
+    # One Mac, one forum process: every request that changes anything
+    # goes through this lock one at a time, while pages that only read
+    # (do_GET) never take it and stay parallel. A plain Lock is enough:
+    # no handler ever takes it twice (the body is read before it is taken
+    # and _routed_post never re-enters).
+    mutation_lock = threading.Lock()
 
     def _symposium_url(record: dict, person: dict) -> str:
         return ("/symposiums/" + urllib.parse.quote(record["board_id"], safe="")
@@ -349,22 +356,29 @@ def make_handler(service):
                 store, "That page does not exist. Start here."))
 
         def do_POST(self):
-            try:
-                self._routed_post()
-            except Exception:
-                self._send(200, _start_page(
-                    store,
-                    "That request could not be completed. Start here."))
-
-        def _routed_post(self):
+            # Read the slow body before taking the lock, so one slow
+            # phone never holds up every other change while it uploads.
             parts = urllib.parse.urlsplit(self.path)
-            path = parts.path
             length = self.headers.get("Content-Length")
             try:
                 size = int(length) if length is not None else 0
             except ValueError:
                 size = 0
             raw = self.rfile.read(size) if size > 0 else b""
+            # Every POST changes something (or tries to), so the routing
+            # below goes through the mutation lock one at a time. Reads
+            # (do_GET) never take it. Later Beads add more POST routes;
+            # they inherit the same guarantee because the lock sits here,
+            # not per route.
+            try:
+                with mutation_lock:
+                    self._routed_post(parts.path, raw)
+            except Exception:
+                self._send(200, _start_page(
+                    store,
+                    "That request could not be completed. Start here."))
+
+        def _routed_post(self, path: str, raw: bytes):
             fields = urllib.parse.parse_qs(raw.decode("utf-8", "replace"))
 
             def field(name: str) -> str:

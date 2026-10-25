@@ -35,6 +35,7 @@ append-only by construction (AC2, AC3).
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Callable
 
@@ -128,6 +129,14 @@ class BoardService:
         self.meta = MetaLog(self.root)
         self.system = SystemLog(self.root)
         self._machines: dict[str, VerdictMachine] = {}
+        self._machines_lock = threading.Lock()
+        # Guards the board-machine cache only: creating a board's machine
+        # replays its journal from disk, so two threads creating it at the
+        # same moment must not each cache their own copy. A read holding a
+        # stale copy would later overwrite the live machine and its newest
+        # events. Mutations themselves stay serialized by the forum's POST
+        # lock; reads never take that lock and stay parallel once the
+        # machine is cached.
 
     # -- canonical chain (lazy: never built at import/construct) -----------
 
@@ -172,7 +181,8 @@ class BoardService:
                                        label=label, medium=medium)
         machine = VerdictMachine(self.journals, record.board_id)
         machine.create_board(record.board_id, str(x).strip(), medium)
-        self._machines[record.board_id] = machine
+        with self._machines_lock:
+            self._machines[record.board_id] = machine
         return OpenResult(record=record, created=True,
                           view=self.view(record.board_id))
 
@@ -192,14 +202,15 @@ class BoardService:
     def machine(self, board_id: str) -> VerdictMachine:
         """The board's SDF-2 machine — the escape hatch for SDF-6 votes."""
         self.board(board_id)
-        cached = self._machines.get(board_id)
-        if cached is not None:
-            return cached
-        machine = VerdictMachine(self.journals, board_id)
-        if machine.state is None:
-            raise UnknownBoard(f"board {board_id} has no journal")
-        self._machines[board_id] = machine
-        return machine
+        with self._machines_lock:
+            cached = self._machines.get(board_id)
+            if cached is not None:
+                return cached
+            machine = VerdictMachine(self.journals, board_id)
+            if machine.state is None:
+                raise UnknownBoard(f"board {board_id} has no journal")
+            self._machines[board_id] = machine
+            return machine
 
     def state(self, board_id: str) -> BoardState:
         return self.machine(board_id).state
@@ -563,7 +574,8 @@ class BoardService:
         if (not isinstance(current_url, str) or not current_url.strip()):
             raise ValueError(
                 "resume needs the current non-blank share URL")
-        self._machines.pop(board_id, None)  # force journal replay from disk
+        with self._machines_lock:
+            self._machines.pop(board_id, None)  # force journal replay from disk
         state = self.machine(board_id).state
         self._heal_log(board_id)
         dropped = (live_mics.drop_board(board_id)

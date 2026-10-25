@@ -19,13 +19,13 @@ data root, rewritten atomically.
 from __future__ import annotations
 
 import json
-import os
 import re
 import secrets
 from pathlib import Path
 from typing import Any
 
 from dictionary.normalize import normalize_x
+from server.store import atomic_write_json
 
 SYMPOSIUMS_FILENAME = "symposiums.json"
 SYMPOSIUMS_VERSION = 1
@@ -186,16 +186,10 @@ class SymposiumStore:
         return None
 
     def save(self) -> None:
+        """Atomically rewrite the Symposium records via the shared helper."""
         payload = {"version": SYMPOSIUMS_VERSION,
                    "symposiums": self.records}
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, indent=2, sort_keys=True)
-            fh.write("\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, self.path)
+        atomic_write_json(self.path, payload)
 
     def load(self) -> None:
         self.records = {}

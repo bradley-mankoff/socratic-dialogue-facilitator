@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import tempfile
 from pathlib import Path
 from typing import Callable
 
@@ -80,18 +81,30 @@ def canonical_path(x_norm: str, root: Path | str = DEFAULT_ROOT) -> Path:
     return canonicals_dir(root) / f"{slug(x_norm)}.json"
 
 
-def _atomic_write_json(path: Path, payload: dict) -> None:
+def atomic_write_json(path: Path, payload: dict) -> None:
+    """Atomically rewrite one small JSON file.
+
+    Each save gets its own temporary file (mkstemp), so two saves at the
+    same moment never share one temporary file and neither clobbers the
+    other; os.replace then swaps the winner into place atomically.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w") as fh:
-        import json as _json
-        import os as _os
-        _json.dump(payload, fh, indent=2, sort_keys=True)
-        fh.write("\n")
-        fh.flush()
-        _os.fsync(fh.fileno())
-    import os as _os2
-    _os2.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent),
+                                prefix=path.name + ".",
+                                suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def creation_key(record: BoardRecord) -> tuple:
@@ -198,7 +211,7 @@ class BoardRegistry:
             "counter": self.counter,
             "boards": {bid: r.to_dict() for bid, r in self.boards.items()},
         }
-        _atomic_write_json(self.path, payload)
+        atomic_write_json(self.path, payload)
 
     def load(self) -> None:
         """Read the registry; a missing or corrupt file means an empty map
@@ -307,7 +320,7 @@ class CanonicalStore:
 
     def _persist(self, x_norm: str, snapshot: dict) -> None:
         self._mem[x_norm] = snapshot
-        _atomic_write_json(self._path_for(x_norm), snapshot)
+        atomic_write_json(self._path_for(x_norm), snapshot)
 
 
 class _EventLog(JsonlStore):
@@ -388,5 +401,6 @@ __all__ = [
     "GOVERNANCE_OPENED", "GOVERNANCE_SETTLED", "TRAY_PRESSED",
     "TRAY_DISCARDED", "SYSTEM_EVENT_TYPES",
     "registry_path", "canonicals_dir", "canonical_path", "creation_key",
+    "atomic_write_json",
     "BoardRegistry", "CanonicalStore", "MetaLog", "SystemLog",
 ]

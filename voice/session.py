@@ -20,22 +20,12 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import warnings
 from pathlib import Path
 
+from server.store import atomic_write_json
+
 VOICE_FILENAME = "voice.json"
-
-
-def _atomic_write_json(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w") as fh:
-        json.dump(payload, fh, indent=2, sort_keys=True)
-        fh.write("\n")
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, path)
 
 
 def _clean_vector(vec) -> list[float] | None:
@@ -90,7 +80,7 @@ class EnrollmentStore:
             raise ValueError("handle_id required")
         stored = self.centroids(board_id)
         stored[handle_id] = _check_centroid(centroid)
-        _atomic_write_json(self.path_for(board_id), {"centroids": stored})
+        atomic_write_json(self.path_for(board_id), {"centroids": stored})
         return {handle_id: stored[handle_id]}
 
     def centroid(self, board_id: str, handle_id: str) -> list[float] | None:

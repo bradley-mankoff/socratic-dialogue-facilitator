@@ -13,12 +13,19 @@ from __future__ import annotations
 
 import re
 import threading
+import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import ThreadingHTTPServer
 
 import pytest
 
+from tests.forum_http import (
+    NoRedirect as _NoRedirect,
+    http_get as _get,
+    http_post_noredirect as _post_noredirect,
+    invite_tokens as _invite_tokens,
+)
 from tests.sdf5_stubs import DATE, S0, justice_chain, make_service
 
 
@@ -49,32 +56,11 @@ def forum_base(tmp_path):
         pass
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
-def _get(url):
-    with urllib.request.urlopen(url) as resp:
-        return resp.status, resp.read().decode("utf-8"), resp.url
-
-
 def _post(url, fields):
     data = urllib.parse.urlencode(fields).encode("utf-8")
     req = urllib.request.Request(url, data=data, method="POST")
     with urllib.request.urlopen(req) as resp:
         return resp.status, resp.read().decode("utf-8"), resp.url
-
-
-def _post_noredirect(url, fields):
-    data = urllib.parse.urlencode(fields).encode("utf-8")
-    req = urllib.request.Request(url, data=data, method="POST")
-    opener = urllib.request.build_opener(_NoRedirect)
-    try:
-        with opener.open(req) as resp:
-            return resp.status, resp.read().decode("utf-8"), dict(resp.headers)
-    except urllib.error.HTTPError as exc:
-        return exc.code, exc.read().decode("utf-8"), dict(exc.headers)
 
 
 def _visible(page: str) -> str:
@@ -96,14 +82,6 @@ def _start(base, **overrides):
     fields = dict(START_FIELDS)
     fields.update(overrides)
     return _post_noredirect(base + "/start", fields)
-
-
-def _invite_tokens(page):
-    """``{name: token}`` parsed from invitation rows (name beside its link)."""
-    rows = re.findall(
-        r'<li[^>]*>\s*<span class="who">([^<]+)</span>.*?/join/([A-Za-z0-9_-]+)',
-        page, re.S)
-    return {name.strip(): token for name, token in rows}
 
 
 def _enter(base, token):
