@@ -236,20 +236,25 @@ class BoardService:
     # -- claims --------------------------------------------------------------
 
     def claim_canonical(self, board_id: str, sense_id: str | None = None, *,
-                        claimant_display: str) -> ClaimResult:
+                        claimant_display: str | None,
+                        handle_id: str | None = None) -> ClaimResult:
         """Claim a cached canonical definition, verbatim and source-tagged."""
         return self._register_claim(board_id, None, kind="canonical",
                                     sense_id=sense_id,
-                                    claimant_display=claimant_display)
+                                    claimant_display=claimant_display,
+                                    handle_id=handle_id)
 
     def claim_original(self, board_id: str, text: str, *,
-                       claimant_display: str) -> ClaimResult:
+                       claimant_display: str | None,
+                       handle_id: str | None = None) -> ClaimResult:
         """Author an original claim (no source tag, no cites)."""
         return self._register_claim(board_id, text, kind="original",
-                                    claimant_display=claimant_display)
+                                    claimant_display=claimant_display,
+                                    handle_id=handle_id)
 
     def revise(self, board_id: str, text: str, *,
-               claimant_display: str,
+               claimant_display: str | None,
+               handle_id: str | None = None,
                in_response_to: str | None = None) -> ClaimResult:
         """Supersede the active claim with a new version node (AC3).
 
@@ -259,6 +264,7 @@ class BoardService:
         """
         return self._register_claim(board_id, text, kind="original",
                                     claimant_display=claimant_display,
+                                    handle_id=handle_id,
                                     in_response_to=in_response_to,
                                     revision=True)
 
@@ -1106,7 +1112,8 @@ class BoardService:
 
     def _register_claim(self, board_id: str, text: str | None, *, kind: str,
                         sense_id: str | None = None,
-                        claimant_display: str,
+                        claimant_display: str | None,
+                        handle_id: str | None = None,
                         in_response_to: str | None = None,
                         revision: bool = False) -> ClaimResult:
         machine = self.machine(board_id)
@@ -1152,7 +1159,8 @@ class BoardService:
 
         pending = self._pending_refutations(state, prev)
         node_id = self._next_node_id(state)
-        claimed_by = self._resolve_handle(machine, None, claimant_display,
+        claimed_by = self._resolve_handle(machine, handle_id,
+                                          claimant_display,
                                           required=False)
         machine.register_node(node_id, text, defender=claimed_by)  # canvas
 

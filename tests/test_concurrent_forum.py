@@ -6,105 +6,49 @@ SymposiumStore load from disk to prove no save was lost.
 """
 from __future__ import annotations
 
-import re
 import threading
 from http.server import ThreadingHTTPServer
 
-import pytest
-
 from server.symposium import SymposiumStore
-from tests.forum_http import (
-    http_get as _get,
-    http_post_noredirect as _post_noredirect,
-    invite_tokens as _invite_tokens,
-    run_at_once as _run_at_once,
-)
 from tests.sdf5_stubs import justice_chain, make_service
-
-
-_SID_RE = re.compile(r"/symposiums/([^/?\"'<>]+)")
-
-
-@pytest.fixture
-def live_forum(tmp_path):
-    """One forum on a free loopback port, shut down after the test."""
-    from web.forum import make_handler
-
-    service = make_service(tmp_path / "store", chain=justice_chain())
-    handler = make_handler(service)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}", service
-    finally:
-        server.shutdown()
-        thread.join()
-        server.server_close()
-
-
-def _start(base, **overrides):
-    fields = {
-        "host_name": "Ada",
-        "host_email": "ada@example.com",
-        "word": "Justice",
-        "guests": (
-            "Bohdan <bohdan@example.com>\n"
-            "Cara <cara@example.com>\n"
-            "Dara <dara@example.com>\n"
-            "Elif <elif@example.com>\n"
-            "Farah <farah@example.com>\n"
-            "Gus <gus@example.com>\n"
-            "Hana <hana@example.com>"
-        ),
-    }
-    fields.update(overrides)
-    return _post_noredirect(base + "/start", fields)
-
-
-def _start_and_tokens(base, **overrides):
-    status, _page, headers = _start(base, **overrides)
-    assert status == 303, _page[:500]
-    location = headers.get("Location", "")
-    inv_url = location if location.startswith("http") else base + location
-    _, invites, _ = _get(inv_url)
-    tokens = _invite_tokens(invites)
-    match = _SID_RE.search(invites)
-    assert match, invites[:500]
-    return invites, tokens, match.group(1)
+from tests.forum_http import (
+    claim as _claim_one,
+    enter as _enter,
+    http_get as _get,
+    live_forum,
+    run_at_once as _run_at_once,
+    start_and_tokens,
+)
 
 
 def _everyone_goes_in_at_once(base, tokens):
-    """Every participant presses "Go in" at the same moment."""
+    """Every invited guest presses "Go in" at the same moment.
+
+    The host joined at Start, so only the guests go in here.
+    """
     return _run_at_once(
-        {
-            name: (lambda token=token: _post_noredirect(
-                base + f"/join/{token}/enter", {}))
-            for name, token in tokens.items()
-        }
+        {name: (lambda token=token: _enter(base, token))
+         for name, token in tokens.items()}
     )
 
 
 def _claim(base, sid, tokens, who, text):
-    return _post_noredirect(
-        base + f"/symposiums/{sid}/claim",
-        {"token": tokens[who], "original": text},
-    )
+    return _claim_one(base, sid, tokens[who], original=text)
 
 
 def test_many_participants_going_in_at_once_all_get_in(live_forum):
     base, service = live_forum
-    _invites, tokens, sid = _start_and_tokens(base)
+    _invites, tokens, sid = start_and_tokens(base, guests=7)
     assert set(tokens) == {
         "Ada", "Bohdan", "Cara", "Dara", "Elif", "Farah", "Gus", "Hana",
     }
-    # Every participant presses "Go in" at the same moment.
-    results, errors = _everyone_goes_in_at_once(base, tokens)
+    # Every invited guest presses "Go in" at the same moment.
+    results, errors = _everyone_goes_in_at_once(
+        base, {name: token for name, token in tokens.items()
+               if name != "Ada"})
     assert not errors, errors
-    for name, (status, page, headers) in results.items():
-        assert status == 303, f"{name}: {status} {page[:500]}"
-        assert "/symposiums/" in headers.get("Location", ""), name
-        assert "could not be completed" not in page, name
+    for name, location in results.items():
+        assert "/symposiums/" in location, name
     # Every participant reads back the Symposium page, never the welcome page.
     for name, token in tokens.items():
         _, page, _ = _get(base + f"/symposiums/{sid}?token={token}")
@@ -112,21 +56,22 @@ def test_many_participants_going_in_at_once_all_get_in(live_forum):
         assert "A Symposium on" in page, name
         assert "Welcome," not in page, name
     # Every participant is marked as joined in the saved Symposium records.
+    # Guests have no names until they name themselves in a later Bead, so
+    # the records match on tokens, not names.
     fresh = SymposiumStore(service.root)
     record = fresh.get(sid)
     assert record is not None
-    assert {p["name"] for p in record["participants"]} == set(tokens)
+    assert {p["token"] for p in record["participants"]} == set(
+        tokens.values())
     for person in record["participants"]:
-        assert person["joined"] is True, person["name"]
+        assert person["joined"] is True, person["token"]
 
 
 def test_two_first_definitions_at_once_leave_exactly_one_active(live_forum):
     base, _service = live_forum
-    _invites, tokens, sid = _start_and_tokens(base)
+    _invites, tokens, sid = start_and_tokens(base, guests=7)
     for token in tokens.values():
-        status, _page, _headers = _post_noredirect(
-            base + f"/join/{token}/enter", {})
-        assert status == 303
+        _enter(base, token)
     results, errors = _run_at_once(
         {
             "Ada": lambda: _claim(
@@ -150,7 +95,7 @@ def test_two_first_definitions_at_once_leave_exactly_one_active(live_forum):
 
 def test_concurrent_requests_leave_a_clean_journal_that_reloads(live_forum):
     base, service = live_forum
-    _invites, tokens, sid = _start_and_tokens(base)
+    _invites, tokens, sid = start_and_tokens(base, guests=7)
     board_id = service.registry.by_id(sid).board_id
     results, errors = _everyone_goes_in_at_once(base, tokens)
     assert not errors, errors
@@ -179,7 +124,8 @@ def test_concurrent_requests_leave_a_clean_journal_that_reloads(live_forum):
     record = fresh_records.get(sid)
     assert record is not None
     assert record["board_id"] == sid
-    assert {p["name"] for p in record["participants"]} == set(tokens)
+    assert {p["token"] for p in record["participants"]} == set(
+        tokens.values())
     assert all(p["joined"] for p in record["participants"])
     _, page, _ = _get(base + f"/symposiums/{sid}?token={tokens['Ada']}")
     assert "could not be completed" not in page
@@ -193,11 +139,9 @@ def test_reads_during_first_claim_after_restart_leave_single_active(live_forum):
     # shows two active definitions on the unfixed code).
     for attempt in range(6):
         word = "Justice" if attempt == 0 else f"Justice {attempt}"
-        _invites, tokens, sid = _start_and_tokens(base, word=word)
+        _invites, tokens, sid = start_and_tokens(base, guests=7, word=word)
         for token in tokens.values():
-            status, _page, _headers = _post_noredirect(
-                base + f"/join/{token}/enter", {})
-            assert status == 303
+            _enter(base, token)
         # A forum restart empties the board-machine cache: a fresh service
         # on the same root replays the board journal from disk on first use.
         fresh = make_service(service.root, chain=justice_chain())

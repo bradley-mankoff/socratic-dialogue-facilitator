@@ -1,16 +1,23 @@
-"""Symposium records: one dialogue is its word plus its people.
+"""Symposium records: one dialogue is its word plus its participants.
 
 Stdlib only. A Symposium is the user-facing name for one dialogue; the
 verdict state underneath stays a board (see :mod:`server.service`), and no
-page in :mod:`web.forum` ever shows that word on screen. Identity is the
-normalized word plus the normalized email set: the same word with the same
-people has at most one open Symposium at a time, the same word with
-different people is a new one, and after one closes the next with the same
-word and people is numbered ("Justice, second symposium").
+page in :mod:`web.forum` ever shows that word on screen. Every Start makes
+a new Symposium: the old rule of one open Symposium per word and group was
+dropped once emails stopped being entered by the host (Human, 2026-10-24),
+and the next Symposium on the same word with the same host is numbered
+("Justice, second symposium").
 
-Email is identity here: each participant carries a personal token, and
-opening that token's link signs the browser in as that participant with no
-password. Only the host ever sees emails; every other page shows names.
+The invitation link is identity here: each participant carries a personal
+token, and opening that token's link signs the browser in as that
+participant with no password. Nobody ever sees another participant's email,
+the host included; no page shows anyone's email but the host's own on the
+host's own players page.
+
+The record holds the Symposium's name (typed by the host in Settings) and
+Anonymous Mode (off by default), alongside the word and one row per
+participant: their token, the host's note to the invitee, joined or not,
+and once joined their name (Anonymous Mode off).
 
 Durability mirrors the registry: one small JSON file under the service's
 data root, rewritten atomically.
@@ -43,9 +50,13 @@ def valid_email(email: str) -> bool:
     return bool(_EMAIL_RE.match(str(email).strip()))
 
 
-def people_key(emails: list[str]) -> list[str]:
-    """Order-free identity for one Symposium's people: sorted emails."""
-    return sorted({normalize_email(email) for email in emails})
+def host_key(email: str) -> list[str]:
+    """Identity for one Symposium's host: their email alone.
+
+    Only the host's email goes in (guests never give theirs to the host),
+    so the lineage of numbered Symposiums ("Justice, second symposium")
+    is keyed by the host alone."""
+    return [normalize_email(email)]
 
 
 _ORDINAL_WORDS = {
@@ -65,48 +76,18 @@ def ordinal_word(n: int) -> str:
     return f"{n}{suffix}"
 
 
-def symposium_title(word: str, ordinal: int) -> str:
-    """Display name: the word, then the numbered-symposium phrase."""
-    word = str(word).strip()
-    if ordinal <= 1:
-        return word
-    return f"{word}, {ordinal_word(ordinal)} symposium"
-
-
-def parse_guest_lines(text: str) -> list[tuple[str, str]]:
-    """Parse the other-participants box: one person per line.
-
-    Each line is ``Name <email>`` or ``Name, email`` (a bare trailing
-    ``Name email`` also reads). Blank lines are skipped. Raises
-    :class:`ValueError` with a plain-words message naming the bad line.
-    """
-    guests: list[tuple[str, str]] = []
-    for lineno, raw in enumerate(str(text).splitlines(), 1):
-        line = raw.strip()
-        if not line:
-            continue
-        if "<" in line and ">" in line:
-            name, _, rest = line.partition("<")
-            email = rest.partition(">")[0]
-        elif "," in line:
-            name, _, email = line.rpartition(",")
-        else:
-            parts = line.split()
-            if len(parts) < 2:
-                raise ValueError(
-                    f"line {lineno} needs a name and an email, "
-                    f"like 'Bohdan <bohdan@example.com>'")
-            name, email = " ".join(parts[:-1]), parts[-1]
-        name, email = name.strip(), email.strip()
-        if not name:
-            raise ValueError(
-                f"line {lineno} needs a name before the email")
-        if not valid_email(email):
-            raise ValueError(
-                f"line {lineno} has an email that does not read "
-                f"like name@example.com")
-        guests.append((name, email))
-    return guests
+def _new_participant(*, is_host: bool = False, joined: bool = False,
+                     handle_id: str | None = None) -> dict[str, Any]:
+    """One participant: token, joined flag, note, host flag."""
+    participant: dict[str, Any] = {
+        "is_host": bool(is_host),
+        "token": secrets.token_urlsafe(18),
+        "joined": bool(joined),
+        "note": "",
+    }
+    if handle_id is not None:
+        participant["handle_id"] = handle_id
+    return participant
 
 
 class SymposiumStore:
@@ -148,30 +129,84 @@ class SymposiumStore:
 
     # -- writes -------------------------------------------------------
 
-    def create(self, *, board_id: str, word: str, people: list[dict],
+    def create(self, *, board_id: str, word: str, players: list[dict],
                ordinal: int,
-               created_at: str) -> dict[str, Any]:
-        """Persist one Symposium; ``people`` holds name/email/is_host maps."""
-        participants = [{
-            "name": person["name"],
-            "email": person["email"],
-            "is_host": bool(person.get("is_host")),
-            "token": secrets.token_urlsafe(18),
-            "joined": False,
-        } for person in people]
+               created_at: str,
+               symposium_name: str | None = None,
+               anonymous: bool = False) -> dict[str, Any]:
+        """Persist one Symposium; ``players`` holds name/email/is_host/joined/handle_id maps.
+
+        The host arrives named (their start-screen name and email, joined
+        at once, with their board handle); every guest arrives as an
+        empty participant made by "Add a player" and names themselves on
+        arrival in a later Bead, so a participant holds only a token, a
+        joined flag, the board handle and the host's note until
+        then. ``anonymous`` is the host's Anonymous Mode switch (off by
+        default); the Symposium's name lives in ``name`` alone.
+
+        Concurrency lives one layer up: every write reaches here inside
+        the forum's mutation lock (web/forum.py), and each file rewrite
+        gets its own tmp file in atomic_write_json (server/store.py)."""
+        name = str(symposium_name or "").strip()
+        participants = []
+        for player in players:
+            participant = _new_participant(
+                is_host=bool(player.get("is_host")),
+                joined=bool(player.get("joined", False)),
+                handle_id=player.get("handle_id"))
+            if player.get("name") is not None:
+                participant["name"] = player["name"]
+            if player.get("email") is not None:
+                participant["email"] = player["email"]
+            participants.append(participant)
         record = {
             "board_id": board_id,
             "word": str(word).strip(),
             "word_norm": normalize_x(word),
-            "people_key": people_key([p["email"] for p in participants]),
+            # On-disk field name stays "people_key" for stored records;
+            # its value holds the host's email only (see host_key).
+            "people_key": host_key(next(
+                p["email"] for p in participants if "email" in p)),
             "participants": participants,
             "ordinal": ordinal,
-            "title": symposium_title(word, ordinal),
+            "name": name,
             "created_at": created_at,
+            "anonymous": bool(anonymous),
         }
         self.records[board_id] = record
         self.save()
         return record
+
+    def add_player(self, board_id: str,
+                   handle_id: str | None = None) -> dict[str, Any] | None:
+        """Make one empty participant: a token, unjoined, no name yet.
+
+        The host taps "Add a player" once per guest; the guest names
+        themselves when they open the link. Returns the new participant."""
+        record = self.records.get(board_id)
+        if record is None:
+            return None
+        participant = _new_participant(handle_id=handle_id)
+        record["participants"].append(participant)
+        self.save()
+        return participant
+
+    def set_note(self, board_id: str, token: str, note: str) -> dict | None:
+        """Keep the host's note to one invitee; return the player saved.
+
+        The note travels to the invitee inside the row's Share message
+        (the note, then the player's personal link). Returning the
+        participant keeps the lookup in one place: callers never search
+        the record again for the note they just saved."""
+        record = self.records.get(board_id)
+        if record is None:
+            return None
+        for person in record["participants"]:
+            if person["token"] == token:
+                person["note"] = str(note).strip()[:200]
+                self.save()
+                return person
+        return None
 
     def mark_joined(self, board_id: str, token: str) -> dict | None:
         """Record one participant's first visit through their welcome page."""
@@ -207,7 +242,7 @@ class SymposiumStore:
 
 __all__ = [
     "SYMPOSIUMS_FILENAME", "SYMPOSIUMS_VERSION",
-    "normalize_email", "valid_email", "people_key",
-    "ordinal_word", "symposium_title", "parse_guest_lines",
+    "normalize_email", "valid_email", "host_key",
+    "ordinal_word",
     "SymposiumStore",
 ]
