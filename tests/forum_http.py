@@ -4,7 +4,7 @@ One place for the way a person drives the forum over HTTP: serve one
 forum on a free loopback port, fill in one start screen, tap Add a
 player, open invitation links, GET a page, POST a form without following
 the redirect, parse invitation links, and start many requests at the
-same moment. ``test_symposium`` (start, welcome, first definition),
+same moment. ``test_symposium`` (start, join, instructions, first definition),
 ``test_phone_start`` (the host's start screen and players page) and
 ``test_concurrent_forum`` (two people at the same moment) drive the
 same seam, so the serving fixture, the start fields and these
@@ -26,6 +26,7 @@ from http.server import ThreadingHTTPServer
 import pytest
 
 from tests.sdf5_stubs import justice_chain, make_service
+from web.forum import PLAYER_COLORS
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -276,8 +277,43 @@ def participant(service, sid, token):
     return next(p for p in stored["participants"] if p["token"] == token)
 
 
+def join(base, token, *, name="", email="", color="", headers=None):
+    """POST one arrival form; ``(status, page, headers)`` without asserting.
+
+    Callers that expect success assert the 303 themselves, so the same
+    helper serves the join tests (which expect 303) and the refusal tests
+    (a taken name or color re-renders the form with a 200). ``headers``
+    carries a cookie jar when one browser opens another person's link.
+    """
+    return http_post_noredirect(
+        base + f"/join/{token}",
+        {"name": name, "email": email, "color": color}, headers=headers)
+
+
+def join_all(base, tokens):
+    """Arrive everyone through the join flow (Bead sdf-zj6.3).
+
+    Each guest joins with their slot name, a matching email and a
+    distinct player color; the host picks their own color. Asserts each
+    join's 303 the way the start helpers do, so a failed arrival reads
+    as the failed assumption it is.
+    """
+    colors = [tint for _label, tint in PLAYER_COLORS]
+    guests = [(name, token) for name, token in tokens.items()
+              if name != "Ada"]
+    for index, (name, token) in enumerate(guests):
+        status, page, _ = join(
+            base, token, name=name, email=f"{name.lower()}@example.com",
+            color=colors[index % len(colors)])
+        assert status == 303, (name, page[:500])
+    if "Ada" in tokens:
+        status, page, _ = join(
+            base, tokens["Ada"], color=colors[len(guests) % len(colors)])
+        assert status == 303, page[:500]
+
+
 def enter(base, token, headers=None):
-    """One tap on Go in; returns the Symposium-page redirect target."""
+    """One tap on Go In; returns the Symposium-page redirect target."""
     status, page, resp_headers = http_post_noredirect(
         base + f"/join/{token}/enter", {}, headers=headers)
     assert status == 303, page[:500]
@@ -290,8 +326,8 @@ def visible(page: str) -> str:
 
 
 def has_go_in_button(page: str) -> bool:
-    """One Go in button, the way a person taps it."""
-    return bool(re.search(r"<button[^>]*>[^<]*go in[^<]*</button>", page, re.I))
+    """One Go In button, the way a person taps it."""
+    return bool(re.search(r"<button[^>]*>[^<]*Go In[^<]*</button>", page))
 
 
 def run_at_once(calls: dict):
@@ -343,7 +379,7 @@ __all__ = [
     "share_message",
     "claim",
     "participant",
-    "enter",
+    "enter", "join", "join_all",
     "has_go_in_button",
     "visible",
 ]

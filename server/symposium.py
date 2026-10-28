@@ -17,7 +17,9 @@ host's own players page.
 The record holds the Symposium's name (typed by the host in Settings) and
 Anonymous Mode (off by default), alongside the word and one row per
 participant: their token, the host's note to the invitee, joined or not,
-and once joined their name (Anonymous Mode off).
+and once joined their name, email and player color (Anonymous Mode off).
+Nobody ever sees another participant's email, the host included; entering
+(Go In) is tracked apart from joining.
 
 Durability mirrors the registry: one small JSON file under the service's
 data root, rewritten atomically.
@@ -208,17 +210,55 @@ class SymposiumStore:
                 return person
         return None
 
-    def mark_joined(self, board_id: str, token: str) -> dict | None:
-        """Record one participant's first visit through their welcome page."""
+    def _participant(self, board_id: str, token: str
+                     ) -> tuple[dict | None, dict | None]:
+        """The ``(record, participant)`` holding ``token``, in one place."""
         record = self.records.get(board_id)
         if record is None:
-            return None
+            return None, None
         for person in record["participants"]:
             if person["token"] == token:
-                person["joined"] = True
-                self.save()
-                return record
-        return None
+                return record, person
+        return None, None
+
+    def save_join(self, board_id: str, token: str, *, name=None,
+                  email=None, color=None) -> dict | None:
+        """Keep one participant's arrival details and mark them joined.
+
+        Only the given fields are kept: a guest's first visit keeps their
+        name, email and player color, while the host's first entry keeps
+        only their color (their name and email came from the start
+        screen). Entering the Symposium (Go In) is a separate step.
+        Returns the participant kept, so callers never search the record
+        again for the row they just saved.
+        """
+        record, person = self._participant(board_id, token)
+        if record is None or person is None:
+            return None
+        if name is not None:
+            person["name"] = name
+        if email is not None:
+            person["email"] = email
+        if color is not None:
+            person["color"] = color
+        person["joined"] = True
+        self.save()
+        return person
+
+    def mark_entered(self, board_id: str, token: str) -> dict | None:
+        """Record one participant pressing Go In on the instructions screen.
+
+        Entering is separate from joining: joining keeps the arrival
+        details (name, email and player color, and sets joined), entering
+        only walks through the instructions screen into the Symposium
+        (sets entered). A later visit to the personal link goes straight
+        in. Returns the participant entered, like save_join does."""
+        record, person = self._participant(board_id, token)
+        if record is None or person is None:
+            return None
+        person["entered"] = True
+        self.save()
+        return person
 
     def save(self) -> None:
         """Atomically rewrite the Symposium records via the shared helper."""

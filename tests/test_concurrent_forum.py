@@ -15,6 +15,7 @@ from tests.forum_http import (
     claim as _claim_one,
     enter as _enter,
     http_get as _get,
+    join_all,
     live_forum,
     run_at_once as _run_at_once,
     start_and_tokens,
@@ -22,7 +23,7 @@ from tests.forum_http import (
 
 
 def _everyone_goes_in_at_once(base, tokens):
-    """Every invited guest presses "Go in" at the same moment.
+    """Every invited guest presses "Go In" at the same moment.
 
     The host joined at Start, so only the guests go in here.
     """
@@ -42,11 +43,13 @@ def test_many_participants_going_in_at_once_all_get_in(live_forum):
     assert set(tokens) == {
         "Ada", "Bohdan", "Cara", "Dara", "Elif", "Farah", "Gus", "Hana",
     }
-    # Every invited guest presses "Go in" at the same moment.
+    join_all(base, tokens)
+    # Every invited guest presses "Go In" at the same moment.
     results, errors = _everyone_goes_in_at_once(
         base, {name: token for name, token in tokens.items()
                if name != "Ada"})
     assert not errors, errors
+    _enter(base, tokens["Ada"])
     for name, location in results.items():
         assert "/symposiums/" in location, name
     # Every participant reads back the Symposium page, never the welcome page.
@@ -56,8 +59,7 @@ def test_many_participants_going_in_at_once_all_get_in(live_forum):
         assert "A Symposium on" in page, name
         assert "Welcome," not in page, name
     # Every participant is marked as joined in the saved Symposium records.
-    # Guests have no names until they name themselves in a later Bead, so
-    # the records match on tokens, not names.
+    # The records match on tokens, not names.
     fresh = SymposiumStore(service.root)
     record = fresh.get(sid)
     assert record is not None
@@ -70,6 +72,7 @@ def test_many_participants_going_in_at_once_all_get_in(live_forum):
 def test_two_first_definitions_at_once_leave_exactly_one_active(live_forum):
     base, _service = live_forum
     _invites, tokens, sid = start_and_tokens(base, guests=7)
+    join_all(base, tokens)
     for token in tokens.values():
         _enter(base, token)
     results, errors = _run_at_once(
@@ -97,6 +100,7 @@ def test_concurrent_requests_leave_a_clean_journal_that_reloads(live_forum):
     base, service = live_forum
     _invites, tokens, sid = start_and_tokens(base, guests=7)
     board_id = service.registry.by_id(sid).board_id
+    join_all(base, tokens)
     results, errors = _everyone_goes_in_at_once(base, tokens)
     assert not errors, errors
     results, errors = _run_at_once(
@@ -140,6 +144,7 @@ def test_reads_during_first_claim_after_restart_leave_single_active(live_forum):
     for attempt in range(6):
         word = "Justice" if attempt == 0 else f"Justice {attempt}"
         _invites, tokens, sid = start_and_tokens(base, guests=7, word=word)
+        join_all(base, tokens)
         for token in tokens.values():
             _enter(base, token)
         # A forum restart empties the board-machine cache: a fresh service

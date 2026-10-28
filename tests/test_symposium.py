@@ -27,6 +27,8 @@ from tests.forum_http import (
     http_get,
     http_get_noredirect,
     invite_tokens,
+    join,
+    join_all,
     live_forum,
     parse_start,
     serve,
@@ -59,9 +61,11 @@ def test_host_start_opens_for_talk_at_once_with_no_begin_button(live_forum):
     base, _service = live_forum
     players_page, tokens, sid = start_and_tokens(base)
     assert "Share" in players_page
+    join_all(base, tokens)
     for name, token in tokens.items():
-        _, welcome, _ = http_get(base + f"/join/{token}")
-        assert "Begin" not in welcome
+        _, instructions, _ = http_get(base + f"/join/{token}")
+        assert "Begin" not in instructions
+    enter(base, tokens["Ada"])
     _, definitions, _ = http_get(
         base + f"/symposiums/{sid}?token={tokens['Ada']}")
     assert "Justice" in definitions
@@ -79,15 +83,18 @@ def test_every_start_makes_a_new_symposium(live_forum):
 
 # -- the players page and the welcome page ----------------------------------
 
-def test_first_visit_shows_welcome_with_word_people_how_it_works(live_forum):
+def test_first_visit_asks_to_join_then_instructions_name_company(live_forum):
     base, _service = live_forum
     _players_page, tokens, _sid = start_and_tokens(base)
-    _, welcome, _ = http_get(base + f"/join/{tokens['Cara']}")
-    assert "Justice" in welcome
-    assert "Ada" in welcome, "the named host is company on the welcome"
-    assert has_go_in_button(welcome)
-    # the welcome page names names, never emails
-    assert "ada@example.com" not in welcome
+    join_all(base, tokens)
+    _, instructions, _ = http_get(base + f"/join/{tokens['Cara']}")
+    assert "Friday Philosophers" in instructions
+    assert "Ada" in instructions, "the named host is company on the screen"
+    assert "Bohdan" in instructions, "a joined guest is company too"
+    assert has_go_in_button(instructions)
+    # the instructions screen names names, never emails
+    assert "ada@example.com" not in instructions
+    assert "bohdan@example.com" not in instructions
 
 
 # -- definitions with small linked source notes ------------------------------
@@ -95,6 +102,7 @@ def test_first_visit_shows_welcome_with_word_people_how_it_works(live_forum):
 def test_definitions_end_with_small_linked_source_notes(live_forum):
     base, _service = live_forum
     _invites, tokens, sid = start_and_tokens(base)
+    join_all(base, tokens)
     enter(base, tokens["Ada"])
     _, page, _ = http_get(base + f"/symposiums/{sid}?token={tokens['Ada']}")
     assert S0 in page
@@ -106,6 +114,7 @@ def test_definitions_end_with_small_linked_source_notes(live_forum):
 def test_no_license_or_access_date_on_definitions(live_forum):
     base, _service = live_forum
     _invites, tokens, sid = start_and_tokens(base)
+    join_all(base, tokens)
     enter(base, tokens["Ada"])
     _, page, _ = http_get(base + f"/symposiums/{sid}?token={tokens['Ada']}")
     shown = visible(page)
@@ -141,7 +150,9 @@ def test_wiktionary_link_markup_stripped_to_display_text():
 def test_first_claim_picks_a_dictionary_definition(live_forum):
     base, service = live_forum
     _players_page, tokens, sid = start_and_tokens(base)
+    join_all(base, tokens)
     enter(base, tokens["Cara"])
+    enter(base, tokens["Ada"])
     status, _page, headers = claim(base, sid, tokens["Ada"], sense="s0")
     assert status == 303
     _, page, _ = http_get(base + f"/symposiums/{sid}?token={tokens['Ada']}")
@@ -162,6 +173,13 @@ def test_first_claim_writes_ones_own_in_a_fresh_symposium(live_forum):
     add_player(base, sid, host_token)
     _, players_page, _ = http_get(players_page_url)
     (guest,) = invite_tokens(players_page).values()
+    from web.forum import PLAYER_COLORS
+    status, page, _ = join(
+        base, guest, name="Bohdan", email="bohdan@example.com",
+        color=PLAYER_COLORS[0][1])
+    assert status == 303, page[:500]
+    status, page, _ = join(base, host_token, color=PLAYER_COLORS[1][1])
+    assert status == 303, page[:500]
     enter(base, guest)
     mine = "Courage is facing fear for what matters."
     status, _page, _headers = claim(base, sid, guest, original=mine)
@@ -174,7 +192,9 @@ def test_first_claim_writes_ones_own_in_a_fresh_symposium(live_forum):
 def test_second_claim_refused_with_plain_message_journal_untouched(live_forum):
     base, service = live_forum
     _players_page, tokens, sid = start_and_tokens(base)
+    join_all(base, tokens)
     enter(base, tokens["Cara"])
+    enter(base, tokens["Ada"])
     claim(base, sid, tokens["Ada"], sense="s0")
     board_id = service.registry.by_id(sid).board_id
     before = service.machine(board_id).state.seq
@@ -212,6 +232,8 @@ def test_symposium_starts_without_facilitator_fields(live_forum):
     players_page_url, host_token, sid = start_on_players(base)
     state = service.state(sid)
     assert state.active_node_id is None, "a fresh Symposium has no claim"
+    join_all(base, {"Ada": host_token})
+    enter(base, host_token)
     _, page, _ = http_get(base + f"/symposiums/{sid}?token={host_token}")
     assert "Justice" in page
     assert "keeps score" not in page.lower()
@@ -224,6 +246,8 @@ def test_legacy_facilitator_fields_are_ignored(live_forum):
         base, mode="facilitates", socrates="bohdan@example.com")
     _, players_page, _ = http_get(players_page_url)
     assert "Add a player" in players_page
+    join_all(base, {"Ada": host_token})
+    enter(base, host_token)
     _, page, _ = http_get(base + f"/symposiums/{sid}?token={host_token}")
     assert "only keeps score" not in page.lower()
     assert "takes part" not in page.lower()
@@ -269,6 +293,8 @@ def test_word_with_no_dictionary_entry_can_still_be_defined_by_hand(tmp_path):
         status, _page, headers = start_symposium(base, word="Sophrosyne")
         assert status == 303
         _players_url, host_token, sid = parse_start(base, headers)
+        join_all(base, {"Ada": host_token})
+        enter(base, host_token)
         _, page, _ = http_get(base + f"/symposiums/{sid}?token={host_token}")
         assert "No dictionary definitions were found" in page
         status, refused, _ = claim(base, sid, host_token, sense="s0")
@@ -288,8 +314,10 @@ def test_no_page_shows_emails_machine_ids_boards_rooms_or_test_controls(
     base, _service = live_forum
     players_page, tokens, sid = start_and_tokens(base)
     guest = tokens["Bohdan"]
+    join_all(base, tokens)
     enter(base, guest)
-    claim(base, sid, guest, sense="s0")
+    status, _page, _headers = claim(base, sid, guest, sense="s0")
+    assert status == 303, "the claim records, so the sweep means something"
     pages = []
     _, welcome, _ = http_get(base + f"/join/{tokens['Cara']}")
     pages.append(welcome)

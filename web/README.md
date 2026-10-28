@@ -8,12 +8,17 @@ and an Anonymous Mode toggle, off by default) and Continue a Symposium
 Symposium at once on the players page, headed by the Symposium's name,
 where "Add a player" adds one row reading "Invited" with a note field
 and a Share button carrying one message (the note, then the player's
-link). Guests open personal invitation links and name themselves on
-arrival.
+link). With Anonymous Mode off, the first visit asks for a name, an
+email and a player color, then shows the one instructions screen (the
+Symposium's name, who else joined, how it works, Go In); the host picks
+their own color the same way on entering, and a later visit goes
+straight in. Joining is one-time: submitting the form again never
+renames anyone.
 `python -m web.forum` serves the repo-local `store/` data home
 with the live dictionary chain. Symposium records (name, word, Anonymous
-Mode, players, tokens, the host's notes to each invitee, who has joined)
-live in `store/symposiums.json` beside the registry; the
+Mode, players, tokens, the host's notes to each invitee, who has joined
+and entered, and each joined participant's name, email and player
+color) live in `store/symposiums.json` beside the registry; the
 verdict state underneath stays a board, and no page ever shows that word.
 No page shows anyone's email but the host's own on the host's own players
 page, and no page says room. Personal links are absolute (built
@@ -21,4 +26,4 @@ from the request Host header, so they paste into Messages or Mail as
 something a guest can open) until sdf-mgt.22 supplies the fixed
 Tailscale address; Start signs the host's browser in with a persistent
 cookie. With Anonymous Mode on no page shows any name; random animals
-arrive in sdf-zj6.3.
+arrive in sdf-zj6.17.

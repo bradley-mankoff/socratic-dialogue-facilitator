@@ -19,9 +19,11 @@ each tap on "Add a player" makes one row reading "Invited" with a note
 field and a Share button, and players name themselves on arrival. One
 Share message carries the row's note and then the player's personal link.
 A link carries no protection: opening it signs that browser in as that
-player, with no password. The first visit shows a short welcome page. No
-page ever shows anyone's email but the host's own on the host's own
-players page, and no page says room.
+player, with no password. The first visit asks for a name, an email and
+a player color, then shows the one instructions screen (the Symposium's
+name, who else joined, how it works, Go In); a later visit goes straight
+in. No page ever shows anyone's email but the host's own on the host's
+own players page, and no page says room.
 
 Inside, the definitions page lists what the dictionaries say, each ending
 with a small linked source note like "(Wiktionary)". License and access
@@ -104,6 +106,22 @@ input[type="text"], textarea {
   font-size: 1rem;
 }
 input[readonly] { font-size: 1rem; }
+input[type="radio"] {
+  width: 1.5rem;
+  height: 1.5rem;
+  vertical-align: middle;
+}
+.swatch {
+  display: inline-block;
+  width: 1.2em;
+  height: 1.2em;
+  border: 1px solid currentColor;
+  vertical-align: middle;
+}
+.player-icon {
+  font-weight: bold;
+  font-size: 1.2em;
+}
 pre { max-width: 100%; overflow-x: auto; }
 ul { padding-left: 1.2rem; }
 li { margin-bottom: 1rem; }
@@ -132,7 +150,7 @@ def _page(title: str, body: str) -> bytes:
 
 # The one placeholder a page may show for a participant with no public
 # name yet (an unjoined slot with Anonymous Mode off, anyone with
-# Anonymous Mode on until random animals arrive in sdf-zj6.3). Owned here
+# Anonymous Mode on until random animals arrive in sdf-zj6.17). Owned here
 # beside the one renderer so no page can print an internal suffix like
 # Guest#2.
 _GUEST_DISPLAY = "Guest"
@@ -148,11 +166,116 @@ def _display_name(record: dict, person: dict) -> str:
 
     Anonymous Mode off: their name, else a guest placeholder.
     Anonymous Mode on: always the placeholder — no page can leak a name
-    with Anonymous Mode on. Random animals arrive in sdf-zj6.3; until
+    with Anonymous Mode on. Random animals arrive in sdf-zj6.17; until
     then anonymous means no name anywhere, not even the host's."""
     if record.get("anonymous"):
         return _GUEST_DISPLAY
     return person.get("name") or _GUEST_DISPLAY
+
+
+# The player colors a guest or the host picks on arrival (Anonymous Mode
+# off): twelve colors easy to tell apart on a phone. Stored as the hex
+# string the form posts; a color one participant has picked is greyed out
+# (disabled) for everyone else.
+PLAYER_COLORS = (
+    ("Red", "#D32F2F"),
+    ("Orange", "#EF6C00"),
+    ("Gold", "#F9A825"),
+    ("Lime", "#7CB342"),
+    ("Green", "#2E7D32"),
+    ("Teal", "#00897B"),
+    ("Blue", "#1E88E5"),
+    ("Indigo", "#3949AB"),
+    ("Purple", "#8E24AA"),
+    ("Pink", "#D81B60"),
+    ("Brown", "#6D4C41"),
+    ("Slate", "#546E7A"),
+)
+
+PLAYER_COLOR_VALUES = frozenset(value for _label, value in PLAYER_COLORS)
+"""The valid player color values, kept beside the table that defines them."""
+
+
+def _participant_badge(record: dict, person: dict) -> str:
+    """One participant as the page shows them: icon plus name.
+
+    The icon is the first letter of their name in their player color;
+    with Anonymous Mode on there are no names yet, so the one renderer
+    falls back to the guest placeholder with no color.
+    """
+    name = _display_name(record, person)
+    color = person.get("color") or ""
+    if record.get("anonymous") or not color:
+        return html.escape(name)
+    initial = html.escape(name[:1])
+    color_hex = html.escape(str(color), quote=True)
+    return (f'<span class="player-icon" style="color:{color_hex}">'
+            f"{initial}</span> {html.escape(name)}")
+
+
+def _join_complete(record: dict, person: dict) -> bool:
+    """Whether one participant has arrived (Anonymous Mode off).
+
+    A guest is complete once they gave their name, email and player
+    color; the host arrives with a name and email from the start screen,
+    so they are complete once they picked their color. Anonymous Mode
+    stays on its own path until random animals arrive in a later Bead.
+    """
+    if record.get("anonymous"):
+        return bool(person.get("joined"))
+    return bool(person.get("name") and person.get("email")
+                and person.get("color"))
+
+
+def _joined_with_name(person: dict) -> bool:
+    """Whether one participant has joined with a name to show.
+
+    The one place that decides "has this person arrived with a name":
+    joined and named. The players page and the instructions screen both
+    build on it, so a nameless row never reads as a person."""
+    return bool(person.get("joined") and person.get("name"))
+
+
+def _host_picks_color_only(person: dict) -> bool:
+    """Whether this arrival is the host picking only a color.
+
+    The host arrives with a name and email from the start screen, so
+    they pick only their color, the same way a guest does. The join
+    form and its handler both ask this one predicate."""
+    return bool(person.get("is_host") and person.get("name"))
+
+
+def _taken_colors(record: dict, person: dict) -> set[str]:
+    """The player colors another participant already picked.
+
+    The one place that decides which colors read greyed out: every
+    color another participant kept. The color radio group and the join
+    handler both build on it."""
+    return {str(other.get("color")) for other in record["participants"]
+            if other["token"] != person["token"] and other.get("color")}
+
+
+def _how_it_works_html() -> str:
+    """The three sentences on how a Symposium works, in one place.
+
+    The one instructions screen and the Anonymous Mode welcome share
+    these words, so a later wording change needs only one edit."""
+    return (
+        "<p>Everyone takes turns putting forward a definition "
+        "and defending it.</p>\n"
+        "<p>Everyone takes turns offering a counterexample "
+        "against it.</p>\n"
+        "<p>The group votes on each counterexample, and on when to set "
+        "a definition aside and move on.</p>\n")
+
+
+def _go_in_form(token: str) -> str:
+    """The Go In button that walks into the Symposium, in one place."""
+    action = "/join/" + token + "/enter"
+    return (
+        f"<form method=\"post\" action=\"{action}\">\n"
+        "<p><button type=\"submit\">Go In</button></p>\n"
+        "</form>")
 
 
 def _joined_names(record: dict, exclude_token: str = "") -> list[str]:
@@ -160,10 +283,34 @@ def _joined_names(record: dict, exclude_token: str = "") -> list[str]:
 
     Only joined participants appear, so unjoined invitation slots never
     read as people; with Anonymous Mode on the joined show as the Guest
-    placeholder. The welcome page, the Symposium page and the start
+    placeholder. With it off, only joined participants with a name
+    appear, so a nameless slot never reads as a Guest in a count. The
+    welcome page, the Symposium page and the start
     page's list of who is in all build on this one helper."""
-    return [_display_name(record, p) for p in record["participants"]
-            if p.get("joined") and p["token"] != exclude_token]
+    names = []
+    for p in record["participants"]:
+        if p["token"] == exclude_token:
+            continue
+        if record.get("anonymous"):
+            if p.get("joined"):
+                names.append(_display_name(record, p))
+        elif _joined_with_name(p):
+            names.append(_display_name(record, p))
+    return names
+
+
+def _needs_instructions(record: dict, person: dict) -> bool:
+    """Whether one participant still owes the instructions screen.
+
+    Anonymous Mode stays on its own path; with it off, everyone passes
+    through the one instructions screen: joining keeps the arrival
+    details, and pressing Go In walks into the Symposium. Until both
+    happened, the Symposium page and the claim form wait behind the
+    personal link, so the screen cannot be skipped by opening the
+    Symposium directly."""
+    if record.get("anonymous"):
+        return False
+    return not _join_complete(record, person) or not person.get("entered")
 
 
 _SMALL_WORDS = frozenset({
@@ -510,7 +657,12 @@ def _players_page(record: dict, host: dict, base_url: str,
         note = person.get("note") or ""
         link = _join_link(base_url, person["token"])
         message = _share_message_attr(_share_message(note, link))
-        status = "Joined" if person.get("joined") else "Invited"
+        if _joined_with_name(person):
+            status = _participant_badge(record, person)
+        elif person.get("joined"):
+            status = "Joined"
+        else:
+            status = "Invited"
         note_action = _players_action_url(record["board_id"], "note")
         rows.append(
             f"<li><span class=\"who\">{status}</span><br>"
@@ -660,13 +812,105 @@ def _players_page(record: dict, host: dict, base_url: str,
     return _page("Symposia", body)
 
 
+def _color_choices(record: dict, person: dict, picked: str = "") -> str:
+    """The player color radio group: taken colors greyed out.
+
+    Every color is a labeled swatch a thumb can tap; a color another
+    participant already picked is disabled, so it reads greyed out and
+    posts nothing. ``picked`` keeps the person's own choice when the
+    form re-renders after a refusal.
+    """
+    taken = _taken_colors(record, person)
+    parts = ["<fieldset><legend>Your Color</legend>"]
+    for label, color_hex in PLAYER_COLORS:
+        if color_hex in taken:
+            extra, suffix = " disabled", " (taken)"
+        else:
+            extra = " checked" if color_hex == picked else ""
+            suffix = ""
+        parts.append(
+            f'<p><label><input type="radio" name="color" '
+            f'value="{html.escape(color_hex, quote=True)}"{extra}>'
+            f' <span class="swatch" '
+            f'style="background-color:{html.escape(color_hex, quote=True)}">'
+            f"</span> {html.escape(label)}{suffix}</label></p>")
+    parts.append("</fieldset>")
+    return "\n".join(parts)
+
+
+def _join_form_page(record: dict, person: dict, notice: str | None = None, *,
+                    name: str = "", color: str = "") -> bytes:
+    """The arrival form: name, email and player color (Anonymous Mode off).
+
+    Headed by the Symposium's name. The host arrives with a name and
+    email from the start screen, so they see their name as fixed words
+    and pick only their color, the same way a guest does. A refusal
+    re-renders the form with the typed name and color kept; the email is
+    never echoed back, and no page ever shows it to anyone else.
+    """
+    action = "/join/" + person["token"]
+    heading = html.escape(_symposium_heading(record))
+    if _host_picks_color_only(person):
+        who = (f"<p>Joining as {_participant_badge(record, person)}.</p>\n")
+        fields = ""
+    else:
+        who = ""
+        fields = (
+            '<p><label for="name">Your Name</label> '
+            '<input type="text" id="name" name="name" '
+            f'value="{html.escape(name, quote=True)}"></p>\n'
+            '<p><label for="email">Your Email</label> '
+            '<input type="text" id="email" name="email" '
+            'autocomplete="email"></p>\n')
+    body = (
+        f"<h1>{heading}</h1>\n"
+        "<h2>Join This Symposium</h2>\n"
+        + _notice_html(notice) +
+        "<p>Your link is all you need: opening it signs this browser "
+        "in as you, with no password. Nothing in a Symposium is "
+        "private.</p>\n"
+        + who +
+        f"<form method=\"post\" action=\"{action}\">\n"
+        + fields
+        + _color_choices(record, person, color) +
+        "<p><button type=\"submit\">Join</button></p>\n"
+        "</form>")
+    return _page("Symposia", body)
+
+
+def _instructions_page(record: dict, person: dict) -> bytes:
+    """The one instructions screen every participant passes through.
+
+    Headed by the Symposium's name: who else has joined (by name, each
+    with their player icon), the three sentences on how it works, and a
+    Go In button. The guest sees it after joining, and the host sees the
+    same screen on entering. The how-it-works words and the Go In form
+    come from the one builders the welcome page shares."""
+    others = [_participant_badge(record, other)
+              for other in record["participants"]
+              if _joined_with_name(other)
+              and other["token"] != person["token"]
+              and not record.get("anonymous")]
+    company = (" with " + ", ".join(others) + "."
+               if others else ", just you for now.")
+    heading = html.escape(_symposium_heading(record))
+    body = (
+        f"<h1>{heading}</h1>\n"
+        f"<p>You are {_participant_badge(record, person)}.</p>\n"
+        "<p>You are joining a Symposium"
+        f"{company}</p>\n"
+        + _how_it_works_html()
+        + _go_in_form(person["token"]))
+    return _page("Symposia", body)
+
+
 def _welcome_page(record: dict, person: dict) -> bytes:
     # Every name on this page goes through the one rendering function:
     # the greeting names nobody, and the company list names only joined
     # participants through _display_name, so no branch here can leak
-    # a name with Anonymous Mode on.
+    # a name with Anonymous Mode on. The how-it-works words and the Go
+    # In form come from the one builders the instructions screen shares.
     others = _joined_names(record, exclude_token=person["token"])
-    action = "/join/" + person["token"] + "/enter"
     body = (
         f"<h1>{html.escape(_title_case(record['word']))}</h1>\n"
         "<p>Welcome.</p>\n"
@@ -674,15 +918,8 @@ def _welcome_page(record: dict, person: dict) -> bytes:
         f"{html.escape(record['word'])}"
         + (" with " + ", ".join(html.escape(n) for n in others) + "."
            if others else ", just you for now.") + "</p>\n"
-        "<p>Everyone takes turns putting forward a definition "
-        "and defending it.</p>\n"
-        "<p>Everyone takes turns offering a counterexample "
-        "against it.</p>\n"
-        "<p>The group votes on each counterexample, and on when to set "
-        "a definition aside and move on.</p>\n"
-        f"<form method=\"post\" action=\"{action}\">\n"
-        "<p><button type=\"submit\">Go in</button></p>\n"
-        "</form>")
+        + _how_it_works_html()
+        + _go_in_form(person["token"]))
     return _page("Symposia", body)
 
 
@@ -834,6 +1071,11 @@ def make_handler(service):
                                          field("token"),
                                          field("player"),
                                          field("note"))
+                return
+            if len(segs) == 2 and segs[0] == "join":
+                self._handle_join_submit(urllib.parse.unquote(segs[1]),
+                                         field("name"), field("email"),
+                                         field("color"))
                 return
             if (len(segs) == 3 and segs[0] == "join"
                     and segs[2] == "enter"):
@@ -995,11 +1237,106 @@ def make_handler(service):
                     "That invitation link is not recognized. "
                            "Start here, or ask the host for your link."))
                 return
-            if person.get("joined"):
+            if record.get("anonymous"):
+                if person.get("joined"):
+                    self._redirect(_symposium_url(record["board_id"],
+                                                  person["token"]))
+                    return
+                self._send(200, _welcome_page(record, person))
+                return
+            if not _join_complete(record, person):
+                self._send(200, _join_form_page(record, person))
+                return
+            if person.get("entered"):
                 self._redirect(_symposium_url(record["board_id"],
                                               person["token"]))
                 return
-            self._send(200, _welcome_page(record, person))
+            self._send(200, _instructions_page(record, person))
+
+        def _handle_join_submit(self, token: str, name: str, email: str,
+                                color: str):
+            record, person = store.get_by_token(token)
+            if record is None or person is None:
+                self._send(200, _start_page(
+                    "That invitation link is not recognized. "
+                           "Start here, or ask the host for your link."))
+                return
+            if record.get("anonymous"):
+                self._redirect("/join/" + person["token"])
+                return
+            if _join_complete(record, person):
+                # Joining is one-time: pressing Back from the
+                # instructions screen and submitting again must not
+                # rename anyone nor free their color for someone else.
+                self._set_cookie(person["token"])
+                self._redirect("/join/" + person["token"])
+                return
+            name, email, color = (name.strip(), email.strip(),
+                                  color.strip())
+
+            def rerender(notice: str, kept_name: str = name,
+                         kept_color: str = color) -> None:
+                # The email is never echoed back: no page shows it.
+                self._send(200, _join_form_page(
+                    record, person, notice, name=kept_name,
+                    color=kept_color))
+
+            others = [other for other in record["participants"]
+                      if other["token"] != person["token"]
+                      and other.get("name")]
+            taken_names = {str(other.get("name", "")).strip().lower()
+                           for other in others}
+            taken_colors = _taken_colors(record, person)
+            # Decided once: the host arrives with a name and email from
+            # the start screen, so they pick only their color, the same
+            # way a guest does. The one color check below serves both.
+            is_host = _host_picks_color_only(person)
+            if is_host:
+                kept_name = str(person.get("name"))
+                kept_email = str(person.get("email") or "")
+            else:
+                if not name:
+                    rerender("Please type your name, so people know "
+                             "who you are.", "", color)
+                    return
+                if name.lower() in taken_names:
+                    rerender("That name is taken. "
+                             "Please choose another.", name, color)
+                    return
+                if not valid_email(email):
+                    rerender("Please type your email as name@example.com, "
+                             "so turn and vote emails can reach you.",
+                             name, color)
+                    return
+                kept_name, kept_email = name, email
+            if not color:
+                rerender("Please pick a color.", kept_name, "")
+                return
+            if color not in PLAYER_COLOR_VALUES:
+                rerender("Please pick one of the colors shown.",
+                         kept_name, "")
+                return
+            if color in taken_colors:
+                rerender("That color is already taken. "
+                         "Please pick another.", kept_name, "")
+                return
+            try:
+                if not is_host and person.get("handle_id"):
+                    service.machine(record["board_id"]).bind_name(
+                        person["handle_id"], kept_name)
+                saved = store.save_join(
+                    record["board_id"], person["token"],
+                    name=(None if is_host else kept_name),
+                    email=(None if is_host else kept_email),
+                    color=color)
+            except Exception:
+                saved = None
+            if saved is None:
+                rerender("That could not be kept. Please try again.",
+                         kept_name, color)
+                return
+            self._set_cookie(person["token"])
+            self._redirect("/join/" + person["token"])
 
         def _handle_enter(self, token: str):
             record, person = store.get_by_token(token)
@@ -1008,7 +1345,24 @@ def make_handler(service):
                     "That invitation link is not recognized. "
                            "Start here, or ask the host for your link."))
                 return
-            store.mark_joined(record["board_id"], token)
+            if record.get("anonymous"):
+                # Anonymous Mode stays on its own path until random
+                # animals arrive in sdf-zj6.17: pressing Go In is joining.
+                store.save_join(record["board_id"], token)
+                store.mark_entered(record["board_id"], token)
+                self._set_cookie(token)
+                self._redirect(_symposium_url(record["board_id"],
+                                              person["token"]))
+                return
+            if not _join_complete(record, person):
+                # A guest who has not joined cannot walk in by posting
+                # to /enter directly or by reopening a stale page: back
+                # to the join form with nothing saved. The cookie is
+                # still set so a closed browser keeps its way back.
+                self._set_cookie(person["token"])
+                self._redirect("/join/" + person["token"])
+                return
+            store.mark_entered(record["board_id"], token)
             self._set_cookie(token)
             self._redirect(_symposium_url(record["board_id"],
                                           person["token"]))
@@ -1032,6 +1386,9 @@ def make_handler(service):
                     "That invitation link is not recognized. "
                            "Start here, or ask the host for your link."))
                 return
+            if _needs_instructions(record, person):
+                self._redirect("/join/" + person["token"])
+                return
             if not person.get("joined"):
                 self._send(200, _welcome_page(record, person))
                 return
@@ -1050,6 +1407,9 @@ def make_handler(service):
                 self._send(200, _start_page(
                     "That invitation link is not recognized. "
                            "Start here, or ask the host for your link."))
+                return
+            if _needs_instructions(record, person):
+                self._redirect("/join/" + person["token"])
                 return
             if not person.get("joined"):
                 self._send(200, _welcome_page(record, person))

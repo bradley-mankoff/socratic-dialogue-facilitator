@@ -32,6 +32,8 @@ from tests.forum_http import (
     http_get_noredirect,
     http_post_noredirect,
     invite_tokens,
+    join,
+    join_all,
     live_forum,
     participant,
     parse_start,
@@ -45,6 +47,7 @@ from tests.forum_http import (
     start_symposium,
     visible,
 )
+from web.forum import PLAYER_COLORS
 
 
 def test_start_without_a_symposium_name_is_refused(live_forum):
@@ -512,25 +515,32 @@ def test_opening_a_link_preview_never_signs_in_or_joins(live_forum):
     status, body, headers = http_get_noredirect(base + f"/join/{token}")
     assert status == 200
     assert headers.get("Set-Cookie") is None, \
-        "previewing a guest's welcome page must not sign the host's" \
+        "previewing a guest's join form must not sign the host's" \
         " browser in as that guest"
-    assert "Go in" in body
+    assert 'name="name"' in body and 'name="email"' in body, \
+        "each link opens that person's join form"
+    assert not has_go_in_button(body), \
+        "the join form is not the instructions screen: no Go In yet"
     guest = participant(service, sid, token)
     assert guest.get("joined") is False, \
-        "looking at the link never joins; only Go in does"
+        "looking at the link never joins; only joining does"
 
 
-def test_each_link_opens_its_welcome_page_and_goes_in(live_forum):
+def test_each_link_opens_its_join_form_and_goes_in(live_forum):
     base, _service = live_forum
     _players_page, tokens, sid = start_and_tokens(base, guests=2)
     guest_tokens = [token for name, token in tokens.items()
                     if name != "Ada"]
     assert len(set(guest_tokens)) == 2
     for token in guest_tokens:
-        _, welcome, _ = http_get(base + f"/join/{token}")
-        assert "Justice" in welcome
-        assert has_go_in_button(welcome), \
-            "each link opens that person's welcome page"
+        _, form, _ = http_get(base + f"/join/{token}")
+        assert 'name="name"' in form and 'name="email"' in form, \
+            "each link opens that person's join form"
+    join_all(base, tokens)
+    for token in guest_tokens:
+        _, instructions, _ = http_get(base + f"/join/{token}")
+        assert has_go_in_button(instructions), \
+            "after joining, each link opens the instructions screen"
         location = enter(base, token)
         assert f"/symposiums/{sid}" in location
         page_url = (location if location.startswith("http")
@@ -539,15 +549,18 @@ def test_each_link_opens_its_welcome_page_and_goes_in(live_forum):
         assert "Justice" in inside
 
 
-def test_welcome_greets_with_no_name_and_three_turn_sentences(live_forum):
+def test_join_form_names_nobody_then_instructions_give_three_sentences(
+        live_forum):
     base, _service = live_forum
     _players_page, tokens, _sid = start_and_tokens(base, guests=1)
-    _, welcome, _ = http_get(base + f"/join/{tokens['Bohdan']}")
-    shown = visible(welcome)
-    assert "Welcome." in shown
-    assert "Welcome, " not in shown, \
-        "until the guest names themselves, the welcome names nobody"
-    lowered = welcome.lower()
+    _, form, _ = http_get(base + f"/join/{tokens['Bohdan']}")
+    assert "Ada" not in form, \
+        "until the guest joins, the join form names nobody"
+    assert not has_go_in_button(form)
+    join_all(base, tokens)
+    _, instructions, _ = http_get(base + f"/join/{tokens['Bohdan']}")
+    assert "Ada" in instructions, "who else has joined, by name"
+    lowered = instructions.lower()
     assert "everyone takes turns putting forward a definition " \
         "and defending it." in lowered
     assert "everyone takes turns offering a counterexample " \
@@ -562,7 +575,9 @@ def test_host_adds_players_at_any_time_from_the_players_page(live_forum):
     add_player(base, sid, host_token)
     _, page, _ = http_get(players_page_url)
     (first,) = set(invite_tokens(page).values())
+    join_all(base, {"Ada": host_token, "Bohdan": first})
     enter(base, first)
+    enter(base, host_token)
     _, symposium, _ = http_get(base + f"/symposiums/{sid}?token={host_token}")
     assert "Justice" in symposium, "the Symposium is already going"
     add_player(base, sid, host_token)
@@ -570,8 +585,9 @@ def test_host_adds_players_at_any_time_from_the_players_page(live_forum):
     assert len(set(invite_tokens(later).values())) == 2, \
         "the host comes back and adds people after the start"
     (second,) = set(invite_tokens(later).values()) - {first}
-    _, welcome, _ = http_get(base + f"/join/{second}")
-    assert "Justice" in welcome
+    _, form, _ = http_get(base + f"/join/{second}")
+    assert "Friday Philosophers" in form, \
+        "a late link opens the join form under the Symposium's name"
 
 
 def test_host_opening_guest_link_sees_welcome_and_go_in_takes_that_place(
@@ -580,20 +596,20 @@ def test_host_opening_guest_link_sees_welcome_and_go_in_takes_that_place(
     _players_page, tokens, sid = start_and_tokens(base, guests=1)
     host_token, token = tokens["Ada"], tokens["Bohdan"]
     host_cookie = {"Cookie": f"sdf_token={host_token}"}
-    _, welcome, _ = http_get(base + f"/join/{token}",
-                             headers=host_cookie)
-    assert "Justice" in welcome
-    assert has_go_in_button(welcome), \
-        "each link opens that person's welcome page, even for the host"
-    status, _page, headers = http_post_noredirect(
-        base + f"/join/{token}/enter", {}, headers=host_cookie)
+    _, form, _ = http_get(base + f"/join/{token}",
+                        headers=host_cookie)
+    assert 'name="name"' in form, \
+        "each link opens that person's join form, even for the host"
+    status, _page, headers = join(
+        base, token, name="Bohdan", email="bohdan@example.com",
+        color=PLAYER_COLORS[0][1], headers=host_cookie)
     assert status == 303, \
-        "Go in signs that browser in as that person, with no password"
-    assert f"/symposiums/{sid}" in headers.get("Location", "") or \
-        "/symposiums/" in headers.get("Location", "")
+        "joining signs that browser in as that person, with no password"
+    assert f"/join/{token}" in headers.get("Location", "")
     assert token in (headers.get("Set-Cookie", "") or "")
     guest = participant(service, sid, token)
     assert guest.get("joined") is True
+    assert guest.get("name") == "Bohdan"
 
 
 # -- Add a player: one personal link with Share and a note -----------------
@@ -639,8 +655,14 @@ def test_personal_links_are_absolute_openable_and_copied(live_forum):
     assert status == 200
     link = message.splitlines()[-1]
     assert link.startswith(base + "/join/"), link
-    _, welcome, _ = http_get(link)
-    assert "Justice" in welcome
+    _, form, _ = http_get(link)
+    assert 'name="name"' in form, "the link opens the guest's join form"
+    status, _page, _headers = join(
+        base, guest, name="Bohdan", email="bohdan@example.com",
+        color=PLAYER_COLORS[0][1])
+    assert status == 303
+    location = enter(base, guest)
+    assert f"/symposiums/{sid}" in location
     assert "execCommand" in players_page and "Copied" in players_page, \
         "the same button copies past navigator.clipboard (plain http has none)" \
         " and tells the host it worked"
@@ -707,12 +729,14 @@ def test_unjoined_guests_board_name_is_not_the_page_placeholder(live_forum):
             f" a guest's name: {enrolled!r}"
 
 
-def test_guest_claim_shows_a_plain_placeholder_never_a_machine_suffix(live_forum):
+def test_named_guest_claim_shows_their_name_never_a_machine_suffix(live_forum):
     base, _service = live_forum
     players_page, tokens, sid = start_and_tokens(base, guests=2)
     names = [name for name in tokens if name != "Ada"]
     second = tokens[names[1]]
+    join_all(base, tokens)
     enter(base, second)
+    enter(base, tokens["Ada"])
     status, _page, _headers = claim(
         base, sid, second, original="Justice is fairness in action.")
     assert status == 303, _page[:500]
@@ -724,9 +748,8 @@ def test_guest_claim_shows_a_plain_placeholder_never_a_machine_suffix(live_forum
         "no internal handle suffix may ever reach a page"
     assert "Guest slot" not in symposium, \
         "the display name the board enrolled stays off the page"
-    assert "Guest" in shown, \
-        "until a guest joins and names themselves, a plain placeholder" \
-        " stands in through the one rendering function"
+    assert "Cara" in shown, \
+        "once a guest joins with their name, the page shows it"
 
 
 def test_sign_in_cookie_is_persistent_so_the_host_keeps_a_way_back(live_forum):
@@ -807,6 +830,8 @@ def test_guest_claim_is_credited_to_their_own_handle(live_forum, anonymous, gues
     kwargs = {"anonymous": "on"} if anonymous else {}
     _players_page, tokens, sid = start_and_tokens(base, guests=guests, **kwargs)
     guest = tokens["Bohdan"] if guests == 1 else tokens["Cara"]
+    if not anonymous:
+        join_all(base, tokens)
     enter(base, guest)
     status, _page, _headers = claim(
         base, sid, guest, original="Justice is fairness in action.")
@@ -828,6 +853,10 @@ def test_second_guest_can_join_on_same_phone_as_first(live_forum):
     _players_page, tokens, sid = start_and_tokens(base, guests=2)
     names = [name for name in tokens if name != "Ada"]
     first, second = tokens[names[0]], tokens[names[1]]
+    status, _page, _headers = join(
+        base, first, name="Bohdan", email="bohdan@example.com",
+        color=PLAYER_COLORS[0][1])
+    assert status == 303
     _, _, first_headers = http_post_noredirect(
         base + f"/join/{first}/enter", {})
     first_cookie = (first_headers.get("Set-Cookie", "") or "").split(";")[0]
@@ -838,16 +867,21 @@ def test_second_guest_can_join_on_same_phone_as_first(live_forum):
     assert status == 200
     assert headers.get("Set-Cookie") is None
     assert "someone else" not in preview.lower(), \
-        "a second guest on the same phone still gets their own welcome page"
-    assert has_go_in_button(preview)
-    status, body, headers = http_post_noredirect(
-        base + f"/join/{second}/enter", {}, headers=jar)
+        "a second guest on the same phone still gets their own join form"
+    assert 'name="name"' in preview
+    assert "Bohdan" not in preview, \
+        "the second form carries no name from the first guest"
+    assert not has_go_in_button(preview), \
+        "the join form is not the instructions screen: no Go In yet"
+    status, body, headers = join(
+        base, second, name="Cara", email="cara@example.com",
+        color=PLAYER_COLORS[1][1], headers=jar)
     assert status == 303, body[:500]
-    assert f"/symposiums/{sid}" in headers.get("Location", "")
     assert second in (headers.get("Set-Cookie", "") or "")
     slot = participant(service, sid, second)
     assert slot.get("joined") is True, \
-        "my link is all I need: joining is one tap even on a shared phone"
+        "my link is all I need: joining works even on a shared phone"
+    assert slot.get("name") == "Cara"
 
 
 def test_anonymous_on_welcome_says_group_is_there_without_naming(live_forum):
@@ -881,9 +915,10 @@ def test_the_note_travels_in_the_share_message_only(live_forum):
     _, noted, _ = http_get(players_page_url)
     assert "for Sam" in noted, \
         "the note sits in its row's field and Share message"
-    _, welcome, _ = http_get(base + f"/join/{token}")
-    assert "for Sam" not in welcome, \
-        "the guest's welcome page never shows the host's note"
+    _, form, _ = http_get(base + f"/join/{token}")
+    assert "for Sam" not in form, \
+        "the guest's join form never shows the host's note"
+    join_all(base, tokens)
     enter(base, token)
     _, symposium, _ = http_get(base + f"/symposiums/{sid}?token={token}")
     assert "for Sam" not in symposium, \
@@ -1068,10 +1103,14 @@ def test_symposium_page_uses_canonical_definitions_and_title_case(live_forum):
         base, guests=1, symposium_name="Friday Philosophers",
         word="justice")
     host_token, guest = tokens["Ada"], tokens["Bohdan"]
-    _, welcome, _ = http_get(base + f"/join/{guest}")
-    # The welcome names no raw lower word as a header: Title Case.
-    assert "<h1>Justice</h1>" in welcome, "the welcome header is Title Case"
-    assert "<h1>justice</h1>" not in welcome
+    _, form, _ = http_get(base + f"/join/{guest}")
+    # The join form is headed by the Symposium's name in Title Case,
+    # never the raw lower word.
+    assert "<h1>Friday Philosophers</h1>" in form, \
+        "the join header is Title Case"
+    assert "<h1>justice</h1>" not in form
+    join_all(base, tokens)
+    enter(base, host_token)
     _, symposium, _ = http_get(base + f"/symposiums/{sid}?token={host_token}")
     assert "<h2>Canonical Definitions</h2>" in symposium
     assert "Definitions from the dictionaries" not in symposium
@@ -1082,12 +1121,14 @@ def test_every_header_is_in_title_case(live_forum):
     players_page, tokens, sid = start_and_tokens(base, guests=1)
     players_page_url = players_url(base, sid, tokens["Ada"])
     host_token, player_token = tokens["Ada"], tokens["Bohdan"]
+    join_all(base, tokens)
+    enter(base, host_token)
     pages = {}
     for label, url in (("landing", base + "/"),
                         ("start", base + "/start"),
                         ("continue", base + "/continue"),
                         ("players", players_page_url),
-                        ("welcome", base + f"/join/{player_token}"),
+                        ("join", base + f"/join/{player_token}"),
                         ("symposium", base + f"/symposiums/{sid}?token={host_token}")):
         _, body, _ = http_get(url)
         pages[label] = body
@@ -1129,14 +1170,18 @@ def test_symposium_name_keeps_small_words_and_inner_capitals(live_forum):
     assert " Of The " not in players_page
 
 
-def test_player_row_reads_joined_once_the_player_goes_in(live_forum):
+def test_player_row_reads_the_players_name_once_they_join(live_forum):
     base, _service = live_forum
     before, tokens, sid = start_and_tokens(base, guests=1)
     players_page_url = players_url(base, sid, tokens["Ada"])
     assert before.count('class="who">Invited') == 1
-    assert 'class="who">Joined' not in before
     guest = tokens["Bohdan"]
-    enter(base, guest)
+    status, _page, _headers = join(
+        base, guest, name="Bohdan", email="bohdan@example.com",
+        color=PLAYER_COLORS[0][1])
+    assert status == 303
     _, after, _ = http_get(players_page_url)
-    assert after.count('class="who">Joined') == 1
-    assert 'class="who">Invited' not in after
+    assert 'class="who">Invited' not in after, \
+        "the row reads the player's name instead of Invited"
+    assert "Bohdan" in after
+    assert "bohdan@example.com" not in after
