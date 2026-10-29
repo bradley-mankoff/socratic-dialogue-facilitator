@@ -290,17 +290,26 @@ def join(base, token, *, name="", email="", color="", headers=None):
         {"name": name, "email": email, "color": color}, headers=headers)
 
 
-def join_all(base, tokens):
+def join_all(base, tokens, anonymous=False):
     """Arrive everyone through the join flow (Bead sdf-zj6.3).
 
-    Each guest joins with their slot name, a matching email and a
-    distinct player color; the host picks their own color. Asserts each
+    With Anonymous Mode off, each guest joins with their slot name, a
+    matching email and a distinct player color; the host picks their own
+    color. With Anonymous Mode on (``anonymous=True``), each guest joins
+    with only their email and is dealt a random animal; the host's animal
+    was dealt at Start, so they join nothing. Asserts each
     join's 303 the way the start helpers do, so a failed arrival reads
     as the failed assumption it is.
     """
-    colors = [tint for _label, tint in PLAYER_COLORS]
     guests = [(name, token) for name, token in tokens.items()
               if name != "Ada"]
+    if anonymous:
+        for name, token in guests:
+            status, page, _ = join(
+                base, token, email=f"{name.lower()}@example.com")
+            assert status == 303, (name, page[:500])
+        return
+    colors = [tint for _label, tint in PLAYER_COLORS]
     for index, (name, token) in enumerate(guests):
         status, page, _ = join(
             base, token, name=name, email=f"{name.lower()}@example.com",

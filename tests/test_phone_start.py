@@ -675,17 +675,22 @@ def test_anonymous_on_hides_every_name_until_animals_arrive(live_forum):
     host_token = tokens["Ada"]
     stored = SymposiumStore(service.root).get(sid)
     assert stored is not None and stored.get("anonymous") is True, \
-        "Anonymous Mode is saved with the Symposium (animals arrive" \
-        " in sdf-zj6.3; until then Anonymous Mode on means no name" \
-        " anywhere but the host's own players page)"
+        "Anonymous Mode is saved with the Symposium: everyone appears" \
+        " as a random animal, with no name anywhere, not even the host's"
     _, players_page, _ = http_get(players_page_url)
-    assert players_page.count("Ada") == 1, \
-        "only the host's own row names the host on their own players page"
+    assert "Ada" not in visible(players_page), \
+        "the host's own players page shows their animal, never their name"
+    host = next(p for p in stored["participants"] if p["is_host"])
+    assert host.get("animal"), "the host gets a random animal at Start"
+    assert host["animal"] in visible(players_page)
+    assert "ada@example.com" in players_page, \
+        "the host's own players page still shows their own email"
     (token,) = set(invite_tokens(players_page).values())
-    _, welcome, _ = http_get(base + f"/join/{token}")
-    assert "Ada" not in welcome, \
-        "a guest's welcome page never leaks the host's name" \
+    _, form, _ = http_get(base + f"/join/{token}")
+    assert "Ada" not in form, \
+        "a guest's join form never leaks the host's name" \
         " with Anonymous Mode on"
+    enter(base, host_token)
     _, symposium, _ = http_get(base + f"/symposiums/{sid}?token={host_token}")
     assert "Justice" in symposium
     assert "Ada" not in symposium
@@ -697,6 +702,7 @@ def test_anonymous_on_hides_every_name_until_animals_arrive(live_forum):
 def test_anonymous_on_claim_shows_no_name_on_the_symposium_page(live_forum):
     base, _service = live_forum
     _, host_token, sid = start_on_players(base, anonymous="on")
+    enter(base, host_token)
     status, _page, _headers = claim(
         base, sid, host_token, original="Justice is order kept kindly.")
     assert status == 303, _page[:500]
@@ -817,6 +823,7 @@ def test_anonymous_on_host_claim_is_credited_to_the_host_handle(live_forum):
     base, service = live_forum
     players_page_url, host_token, sid = start_on_players(base, anonymous="on")
     add_player(base, sid, host_token)
+    enter(base, host_token)
     status, _page, _headers = claim(
         base, sid, host_token, original="Justice is order kept kindly.")
     assert status == 303, _page[:500]
@@ -830,7 +837,11 @@ def test_guest_claim_is_credited_to_their_own_handle(live_forum, anonymous, gues
     kwargs = {"anonymous": "on"} if anonymous else {}
     _players_page, tokens, sid = start_and_tokens(base, guests=guests, **kwargs)
     guest = tokens["Bohdan"] if guests == 1 else tokens["Cara"]
-    if not anonymous:
+    if anonymous:
+        status, _page, _headers = join(
+            base, guest, email="guest@example.com")
+        assert status == 303, _page[:500]
+    else:
         join_all(base, tokens)
     enter(base, guest)
     status, _page, _headers = claim(

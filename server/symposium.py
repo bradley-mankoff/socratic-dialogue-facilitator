@@ -222,13 +222,16 @@ class SymposiumStore:
         return None, None
 
     def save_join(self, board_id: str, token: str, *, name=None,
-                  email=None, color=None) -> dict | None:
+                  email=None, color=None, animal=None) -> dict | None:
         """Keep one participant's arrival details and mark them joined.
 
         Only the given fields are kept: a guest's first visit keeps their
-        name, email and player color, while the host's first entry keeps
-        only their color (their name and email came from the start
-        screen). Entering the Symposium (Go In) is a separate step.
+        name, email and player color (Anonymous Mode off) or their email
+        and random animal (Anonymous Mode on), while the host's first
+        entry keeps only their color (their name and email came from the
+        start screen) or nothing extra (Anonymous Mode on: the host's
+        email came from the start screen and their animal was dealt at
+        Start). Entering the Symposium (Go In) is a separate step.
         Returns the participant kept, so callers never search the record
         again for the row they just saved.
         """
@@ -241,6 +244,8 @@ class SymposiumStore:
             person["email"] = email
         if color is not None:
             person["color"] = color
+        if animal is not None:
+            person["animal"] = animal
         person["joined"] = True
         self.save()
         return person

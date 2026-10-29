@@ -12,8 +12,14 @@ link). With Anonymous Mode off, the first visit asks for a name, an
 email and a player color, then shows the one instructions screen (the
 Symposium's name, who else joined, how it works, Go In); the host picks
 their own color the same way on entering, and a later visit goes
-straight in. Joining is one-time: submitting the form again never
-renames anyone.
+straight in. With Anonymous Mode on, the first visit asks only for an
+email and deals a random animal (its icon with its name beside it, no
+two alike, no name and no color; the host gets one the same way at
+Start), then shows the same instructions screen; every page shows each
+participant through the one rendering function, and the Symposium page
+carries a small Who Is Here panel listing everyone and whether each has
+joined. Joining is one-time: submitting the form again never
+renames anyone nor deals a second animal.
 `python -m web.forum` serves the repo-local `store/` data home
 with the live dictionary chain. Symposium records (name, word, Anonymous
 Mode, players, tokens, the host's notes to each invitee, who has joined
@@ -25,5 +31,5 @@ page, and no page says room. Personal links are absolute (built
 from the request Host header, so they paste into Messages or Mail as
 something a guest can open) until sdf-mgt.22 supplies the fixed
 Tailscale address; Start signs the host's browser in with a persistent
-cookie. With Anonymous Mode on no page shows any name; random animals
-arrive in sdf-zj6.17.
+cookie. With Anonymous Mode on no page shows any name: everyone appears
+as their random animal.
